@@ -84,7 +84,11 @@ function splitFileName(fileName) {
 
 // 生成 agent-memory 全量记忆的标题级索引（渐进披露：只给标题/类型/描述，
 // 全文靠 mem_read）。空库返回 ""（不注入无意义内容）。
-export async function buildMemoryIndex(client, { signal, timeoutMs } = {}) {
+//
+// projectCandidates：当前项目的 slug 候选（如 ["daily"] 或 ["GithubRes-ninfer"]）。
+// 命中时走混合格式：当前项目带描述 + 其它项目只留标题（省 token）；
+// 全部未命中时退回全量带描述索引（兜底，不比不传候选差）。
+export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandidates } = {}) {
   const n = await notebookId(client, signal);
   const rows = await sql(
     client,
@@ -93,12 +97,40 @@ export async function buildMemoryIndex(client, { signal, timeoutMs } = {}) {
     timeoutMs,
   );
   if (rows.length === 0) return "";
+
   const MAX_LINES = 150;
-  const lines = rows.map((r) => {
+  const withDesc = (r) => {
     const attrs = parseIal(r.ial);
     const desc = attrs.description ? `：${attrs.description}` : "";
     return `- [${r.hpath}] (${attrs.memtype ?? "?"})${desc}`;
-  });
+  };
+  const titleOnly = (r) => {
+    const attrs = parseIal(r.ial);
+    return `- ${r.hpath} (${attrs.memtype ?? "?"})`;
+  };
+
+  // 混合模式：当前项目（带描述）+ 其它项目（仅标题）
+  if (projectCandidates?.length) {
+    const isCurrent = (r) => projectCandidates.includes(parseIal(r.ial).project);
+    const current = rows.filter(isCurrent);
+    if (current.length > 0) {
+      const others = rows.filter((r) => !isCurrent(r));
+      const othersLines = others.map(titleOnly);
+      const othersBody =
+        othersLines.length > MAX_LINES
+          ? othersLines.slice(0, MAX_LINES).join("\n") + `\n… 另有 ${othersLines.length - MAX_LINES} 条，用 mem_search 查`
+          : othersLines.join("\n");
+      return (
+        `跨项目记忆索引（思源 agent-memory，共 ${rows.length} 条，当前项目 ${current.length} 条）：\n` +
+        `## 当前项目\n${current.map(withDesc).join("\n")}\n` +
+        `## 其它项目（仅标题）\n${othersBody}\n` +
+        "需要全文用 mem_read（file_name = <project>/<记忆名>）；按关键词用 mem_search。"
+      );
+    }
+    // 当前项目无记忆 → 落到下方全量索引
+  }
+
+  const lines = rows.map(withDesc);
   const body =
     lines.length > MAX_LINES
       ? lines.slice(0, MAX_LINES).join("\n") + `\n… 另有 ${lines.length - MAX_LINES} 条，用 mem_search 查`

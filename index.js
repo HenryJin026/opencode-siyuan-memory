@@ -24,6 +24,19 @@
 import { McpClient } from "./mcp.js";
 import { buildMemTools, buildMemoryIndex } from "./tools.js";
 
+// 从会话目录推导当前项目的 slug 候选（对齐迁移规则：末段 + 父段-末段，
+// 覆盖消歧 slug，如 D:\...\GithubRes\ninfer → ["ninfer", "GithubRes-ninfer"]）。
+// 全部候选在思源里都无记忆时，buildMemoryIndex 自动退回全量索引。
+function slugCandidates(dir) {
+  if (!dir || typeof dir !== "string") return [];
+  const segs = dir.replace(/\\/g, "/").split("/").filter(Boolean);
+  const last = segs[segs.length - 1];
+  if (!last) return [];
+  const out = [last];
+  if (segs.length >= 2) out.push(`${segs[segs.length - 2]}-${last}`);
+  return [...new Set(out)];
+}
+
 export default {
   id: "siyuan-memory",
   async setup(ctx) {
@@ -45,12 +58,16 @@ export default {
       }
       const injected = new Set(); // 成功注入的 sessionID
       const failed = new Set(); // 注入失败过、本进程内不再重试的 sessionID
+      const candidates = slugCandidates(ctx.location?.directory);
       await ctx.session.hook("context", async (event) => {
         const sid = event?.sessionID;
         if (!sid || injected.has(sid) || failed.has(sid)) return;
         try {
           // 10s 上限：思源挂着时不拖死首轮模型调用
-          const index = await buildMemoryIndex(client, { timeoutMs: 10_000 });
+          const index = await buildMemoryIndex(client, {
+            timeoutMs: 10_000,
+            projectCandidates: candidates,
+          });
           if (!index) return; // 空库不注入
           event.system.push({ type: "text", text: index });
           injected.add(sid);
