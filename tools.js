@@ -256,7 +256,8 @@ export function buildMemTools(client) {
       description:
         "记录 / 更新一个项目的「工作状态」快照（<project>/progress，覆盖写，永远只有一份）。" +
         "跨会话延续用：阶段性工作做到检查点时调用，新会话 mem_read 它就能接上当前状态。" +
-        "content 用 markdown，推荐四段：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文（可选）。",
+        "content 用 markdown，按 5 节模板写（空节省略）：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键决策 / ## 关键上下文。" +
+        "边界——当前状态=现在时事实；已完成=过去时工作项（一条一个，不放状态/流程说明）；下一步=将来时动作；关键决策=取舍记录（选了什么+为什么）；关键上下文=背景参考。",
       input: {
         type: "object",
         properties: {
@@ -267,7 +268,12 @@ export function buildMemTools(client) {
           content: {
             type: "string",
             description:
-              "当前状态 markdown，推荐结构：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文（可选）",
+              "当前状态 markdown，按 5 节模板写（空节省略）：\n" +
+              "## 当前状态\n<现在时事实：git/同步/部署状态、在跑什么、健康度>\n" +
+              "## 已完成\n- <工作项（功能/修复/决策），可带 commit ref，一条一个>\n" +
+              "## 下一步\n- <待办/下一步动作/可选增强/未决问题>\n" +
+              "## 关键决策\n- <选了什么 + 为什么>\n" +
+              "## 关键上下文\n<参考源、坑、依赖、回归基线>",
           },
           description: {
             type: "string",
