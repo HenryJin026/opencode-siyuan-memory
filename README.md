@@ -43,6 +43,8 @@ OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook
 2. 调 `siyuan-mcp-*` 工具（`notebook` / `document` / `sql` / `search` / `attr` / `export`）读写 agent-memory notebook
 3. 记忆布局 `/<project-slug>/<记忆名>`（末段 = doc 标题 = hpath 末段）；属性 `memtype` / `project` / `description` 落在 `blocks.ial`（SiYuan 保留键 `type` 不可用，故用 `memtype`）
 
+> **mcptool 代理 = [MCPHub](https://github.com/samanhappy/mcphub)**（自托管 MCP 网关）：本机 MCP 工具统一经它的**分组路由**接入（`/mcp/{group}` 等稳定端点）。插件连到对应 group 端点、经网关发 `tools/call`（MCP 协议调工具的标准 JSON-RPC 方法）调 `siyuan-mcp-*` 工具；若 siyuan-mcp 直连（不经网关）则用不到经网关这一步。
+
 ### 注入设计
 
 - `ctx.session.hook("context")`：会话**首次**模型调用时拉标题级索引（一条 SQL），push 进 `event.system`

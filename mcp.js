@@ -4,6 +4,11 @@
 // （opencode.json 里 mcp.servers.mcptool 配置的远程端点）发 JSON-RPC，
 // 从而在插件里调用 siyuan-mcp-* 工具。
 //
+// mcptool 代理 = MCPHub（mcphub，github.com/samanhappy/mcphub）：自托管 MCP 网关，
+// 把多个后端 MCP server（含 siyuan-mcp）按分组路由暴露成稳定端点（/mcp/{group} 等）。
+// 插件连到对应 group 端点、经网关发 tools/call（MCP 协议调工具的标准 JSON-RPC 方法）
+// 调 siyuan-mcp-* 工具；若 siyuan-mcp 直连（不经网关）则用不到经网关这一步。
+//
 // 安全属性（保证不炸 opencode 会话）：
 //   - 加载时零 I/O：本模块只在工具被调用时才读配置 / 发请求（懒初始化）。
 //   - 每次请求都有超时上限（AbortController），并支持外部 signal 取消
