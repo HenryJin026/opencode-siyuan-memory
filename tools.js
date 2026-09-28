@@ -145,6 +145,27 @@ export function buildMemTools(client) {
   let cachedNb = null;
   const nb = async (signal) => (cachedNb ??= await notebookId(client, signal));
 
+  // 项目 slug 缓存（mem_search 漏出哨兵用）：agent-memory 里所有记忆 doc 的
+  // hpath 首段集合。5 分钟 TTL，mem_save 后失效。
+  let slugCache = null; // { slugs: Set<string>, at: number }
+  const SLUG_TTL_MS = 5 * 60 * 1000;
+  async function projectSlugs(signal) {
+    if (slugCache && Date.now() - slugCache.at < SLUG_TTL_MS) return slugCache.slugs;
+    const n = await nb(signal);
+    const rows = await sql(
+      client,
+      `SELECT hpath FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%'`,
+      signal,
+    );
+    const slugs = new Set();
+    for (const r of rows) {
+      const seg = r.hpath?.split("/")[1];
+      if (seg) slugs.add(seg);
+    }
+    slugCache = { slugs, at: Date.now() };
+    return slugs;
+  }
+
   return {
     mem_save: {
       name: "mem_save",
@@ -205,6 +226,7 @@ export function buildMemTools(client) {
           if (input.name) attrs.name = input.name;
           if (input.description) attrs.description = input.description;
           await client.callTool("siyuan-mcp-attr", { action: "set", id: newId, attrs }, { signal });
+          slugCache = null; // 可能新增项目 slug，失效缓存
           return {
             content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -233,7 +255,13 @@ export function buildMemTools(client) {
         try {
           const signal = context?.signal;
           const n = await nb(signal);
-          const text = await client.callTool("siyuan-mcp-search", { action: "fulltext", query: input.query }, { signal });
+          // notebook 参数限定结果集（内核源码：硬 box=? 过滤，修召回）；
+          // pageSize 防默认页大小截断。
+          const text = await client.callTool(
+            "siyuan-mcp-search",
+            { action: "fulltext", query: input.query, notebook: n, pageSize: 100 },
+            { signal },
+          );
           if (!text || text.startsWith("No results")) return { content: `没有匹配「${input.query}」的记忆。` };
 
           // 解析命中条目：`- [hpath] Type` + 片段 + `id: xxx`
@@ -256,15 +284,15 @@ export function buildMemTools(client) {
           }
           if (entries.length === 0) return { content: `没有匹配「${input.query}」的记忆。` };
 
-          // 只保留 agent-memory notebook 的命中（box 过滤）
-          const ids = entries.map((e) => e.id);
-          const rows = await sql(
-            client,
-            `SELECT id, box, hpath FROM blocks WHERE id IN (${ids.map((i) => `'${i}'`).join(",")})`,
-            signal,
-          );
-          const kept = new Set(rows.filter((r) => r.box === n).map((r) => r.id));
-          const hits = entries.filter((e) => kept.has(e.id));
+          // 漏出哨兵：只保留 hpath 首段属于已知项目 slug 的命中（= agent-memory 的）。
+          // notebook 参数已是硬 box=? 过滤，正常不会有条目被滤掉；若滤掉，
+          // 说明内核 FTS 过滤回归，记录探针。
+          const slugs = await projectSlugs(signal);
+          const hits = entries.filter((e) => slugs.has(e.hpath.split("/")[1]));
+          const leaked = entries.length - hits.length;
+          if (leaked > 0) {
+            console.log(`[siyuan-memory] mem_search「${input.query}」检测到 ${leaked} 条非 agent-memory 命中（notebook 过滤疑似失效）`);
+          }
           const filtered = input.project
             ? hits.filter((e) => e.hpath === input.project || e.hpath.startsWith(`/${input.project}/`))
             : hits;
