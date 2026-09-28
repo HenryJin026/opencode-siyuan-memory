@@ -8,6 +8,9 @@
 // 3. git commit 提醒：订阅公开事件流，检测到 shell 工具的 git commit 成功后，
 //    在下次模型调用时经 context hook 注入一句「考虑用 mem_progress 更新
 //    progress 快照」的提醒（nudge，不强制；模型自行判断要不要更新）。
+// 4. 新增记忆补充注入：检测到本会话 mem_save 成功后，在下次模型调用时经
+//    context hook 注入一行「本会话新增/更新记忆：…（mem_read 可读全文）」
+//    的增量提示（只列增量、不重发全量索引；只覆盖本会话，不轮询其它会话）。
 //
 // 安全设计（载入不影响 opencode 正常会话）：
 //   1. setup 阶段零网络 I/O、零文件写入——MCP 连接是懒初始化（首次工具
@@ -62,6 +65,7 @@ export default {
       const injected = new Set(); // 成功注入记忆索引的 sessionID
       const failed = new Set(); // 注入失败过、本进程内不再重试的 sessionID
       const pendingReminder = new Map(); // git commit 成功后待提醒：sessionID -> 命令摘要
+      const pendingMemories = new Map(); // 本会话 mem_save 成功后待补充注入：sessionID -> Set<file_name>
       const candidates = slugCandidates(ctx.location?.directory);
       await ctx.session.hook("context", async (event) => {
         const sid = event?.sessionID;
@@ -96,6 +100,17 @@ export default {
           });
           console.log(`[siyuan-memory] 已向会话 ${sid} 注入 commit 提醒`);
         }
+        // 3. 本会话新增记忆补充注入（每次模型调用检查）
+        const memSet = pendingMemories.get(sid);
+        if (memSet && memSet.size > 0) {
+          pendingMemories.delete(sid);
+          const list = [...memSet].join("、");
+          event.system.push({
+            type: "text",
+            text: `本会话新增/更新记忆：${list}（可用 mem_read 读全文）`,
+          });
+          console.log(`[siyuan-memory] 已向会话 ${sid} 注入新增记忆提醒（${memSet.size} 条）`);
+        }
       });
 
       // git commit 检测：订阅公开事件流，检测 shell 工具的 git commit 成功，
@@ -105,6 +120,7 @@ export default {
       if (typeof ctx.event?.subscribe === "function") {
         const controller = new AbortController();
         const pendingCommits = new Map(); // callID -> { sessionID, cmd }
+        const pendingMemCalls = new Map(); // callID -> { sessionID, fileName }
         const SHELL_TOOLS = new Set(["shell", "bash"]);
         void (async () => {
           try {
@@ -121,6 +137,14 @@ export default {
                       sessionID: event.sessionID,
                       cmd: event.input.command.slice(0, 80),
                     });
+                  } else if (
+                    event.tool === "mem_save" &&
+                    typeof event.input?.file_name === "string"
+                  ) {
+                    pendingMemCalls.set(event.callID, {
+                      sessionID: event.sessionID,
+                      fileName: event.input.file_name,
+                    });
                   }
                 } else if (type === "session.next.tool.success") {
                   const entry = pendingCommits.get(event.callID);
@@ -128,8 +152,19 @@ export default {
                     pendingCommits.delete(event.callID);
                     pendingReminder.set(entry.sessionID, entry.cmd);
                   }
+                  const memEntry = pendingMemCalls.get(event.callID);
+                  if (memEntry) {
+                    pendingMemCalls.delete(event.callID);
+                    let set = pendingMemories.get(memEntry.sessionID);
+                    if (!set) {
+                      set = new Set();
+                      pendingMemories.set(memEntry.sessionID, set);
+                    }
+                    set.add(memEntry.fileName);
+                  }
                 } else if (type === "session.next.tool.failed") {
                   pendingCommits.delete(event.callID);
+                  pendingMemCalls.delete(event.callID);
                 }
               } catch (err) {
                 console.error(`[siyuan-memory] 处理事件失败：${err.message}`);
@@ -141,7 +176,7 @@ export default {
         })();
         cleanup = () => controller.abort();
       } else {
-        console.error("[siyuan-memory] ctx.event.subscribe 不可用（API 漂移？），跳过 commit 提醒");
+        console.error("[siyuan-memory] ctx.event.subscribe 不可用（API 漂移？），跳过 commit 提醒与新增记忆补充注入");
       }
 
       return cleanup;
