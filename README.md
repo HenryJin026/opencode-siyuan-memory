@@ -7,12 +7,13 @@ OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook
 - **6 个记忆工具**：`mem_save` / `mem_progress` / `mem_search` / `mem_read` / `mem_list` / `mem_delete`
 - **工作状态延续**：`mem_progress` 把阶段性成果 / 进度 / 下一步写成 `<project>/progress` 快照（覆盖写，永远一份）。阶段性工作做到检查点时更新它，新会话 `mem_read` 就能接上当前状态继续推进
 - **自动注入**：每个会话首次模型调用时，把 agent-memory 全量记忆的**标题级索引**（标题 / memtype / 一句话描述）自动注入系统提示——模型开对话就能看到有哪些记忆，需要全文时再 `mem_read` 拉取（渐进披露，token 开销可控）
+- **模型调用时 nudge 注入**：`ctx.session.hook("context")` 每次模型调用检查——① git commit 成功后提醒用 `mem_progress` 更新 progress 快照（附命令摘要）；② 本会话 `mem_save` 成功后补充注入「本会话新增/更新记忆」增量提示。均为 nudge（不强制），模型自行判断要不要行动
 - **跨项目**：记忆按 `<project-slug>/<记忆名>` 存思源，任何项目的会话都能搜到
 - **零硬编码凭据**：mcptool 端点与 Bearer token 运行时从 `opencode.json` 读取，token 轮换自动跟随
 
 ## 要求
 
-- OpenCode V2（插件 API：`ctx.tool.transform` / `ctx.session.hook`）
+- OpenCode V2（插件 API：`ctx.tool.transform` / `ctx.session.hook` / `ctx.event.subscribe`）
 - `opencode.json` 已配置 `mcp.servers.mcptool`（暴露 `siyuan-mcp-*` 工具的远程 MCP 代理）
 - 思源实例上存在 `agent-memory` notebook
 
@@ -49,16 +50,20 @@ OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook
 
 ### 注入设计
 
-- `ctx.session.hook("context")`：会话**首次**模型调用时拉标题级索引（一条 SQL），push 进 `event.system`
-- 按 sessionID 去重；注入失败（思源离线 / 超时）标记该会话、本进程内不再重试——避免思源挂着时每轮模型调用都等 10s
-- 注入单独 10s 超时；失败静默跳过，不影响会话；服务重启后恢复
+`ctx.session.hook("context")` 每次模型调用都跑，分三类注入（都 push 进 `event.system`）：
+
+- **记忆索引（每会话一次）**：会话**首次**模型调用时拉标题级索引（一条 SQL）；按 sessionID 去重；注入失败（思源离线 / 超时）标记该会话、本进程内不再重试——避免思源挂着时每轮模型调用都等 10s；单独 10s 超时，失败静默跳过，不影响会话，服务重启后恢复
+- **git commit 提醒（每次调用检查）**：订阅公开事件流（`ctx.event.subscribe`）检测 shell 工具的 `git commit` 成功 → 标记会话 → 下次模型调用注入「考虑用 mem_progress 更新 progress 快照」（附命令摘要，截断 80 字符）
+- **新增记忆补充注入（每次调用检查）**：检测本会话 `mem_save` 成功 → 下次模型调用注入一行「本会话新增/更新记忆：…（mem_read 可读全文）」增量提示（只列增量、不重发全量索引；只覆盖本会话，不轮询其它会话）
+
+后两类复用同一套事件订阅模式；`ctx.event.subscribe` 不可用（API 漂移）时随之一并静默降级。
 
 ## 安全设计
 
 - **加载期零 I/O**：MCP 连接懒初始化，思源 / 代理离线时加载不受影响
 - **setup 全程 try/catch**：任何异常只 `console.error`，绝不向 PluginSupervisor 抛
 - **工具 executor 全部内部 catch**：失败返回错误文本，不产生未处理 rejection
-- **API 漂移防御**：`ctx.tool.transform` / `ctx.session.hook` 不存在时静默跳过对应功能，插件降级不炸会话
+- **API 漂移防御**：`ctx.tool.transform` / `ctx.session.hook` / `ctx.event.subscribe` 不存在时静默跳过对应功能，插件降级不炸会话
 
 ## License
 
