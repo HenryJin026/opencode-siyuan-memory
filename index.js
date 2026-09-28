@@ -61,7 +61,7 @@ export default {
       }
       const injected = new Set(); // 成功注入记忆索引的 sessionID
       const failed = new Set(); // 注入失败过、本进程内不再重试的 sessionID
-      const pendingReminder = new Set(); // git commit 成功后待提醒的 sessionID
+      const pendingReminder = new Map(); // git commit 成功后待提醒：sessionID -> 命令摘要
       const candidates = slugCandidates(ctx.location?.directory);
       await ctx.session.hook("context", async (event) => {
         const sid = event?.sessionID;
@@ -85,12 +85,13 @@ export default {
           }
         }
         // 2. git commit 提醒注入（每次模型调用检查）
-        if (pendingReminder.has(sid)) {
+        const cmdSnippet = pendingReminder.get(sid);
+        if (cmdSnippet !== undefined) {
           pendingReminder.delete(sid);
           event.system.push({
             type: "text",
             text:
-              "刚完成 git commit。若本次改动值得记录，请用 mem_progress 更新当前项目的 progress 工作状态快照" +
+              `刚完成 git commit（${cmdSnippet}）。若本次改动值得记录，请用 mem_progress 更新当前项目的 progress 工作状态快照` +
               "（推荐四段：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文）。",
           });
           console.log(`[siyuan-memory] 已向会话 ${sid} 注入 commit 提醒`);
@@ -103,7 +104,7 @@ export default {
       let cleanup = () => {};
       if (typeof ctx.event?.subscribe === "function") {
         const controller = new AbortController();
-        const pendingCommits = new Map(); // callID -> sessionID
+        const pendingCommits = new Map(); // callID -> { sessionID, cmd }
         const SHELL_TOOLS = new Set(["shell", "bash"]);
         void (async () => {
           try {
@@ -116,13 +117,16 @@ export default {
                     typeof event.input?.command === "string" &&
                     /\bgit\s+commit(\s|$)/.test(event.input.command)
                   ) {
-                    pendingCommits.set(event.callID, event.sessionID);
+                    pendingCommits.set(event.callID, {
+                      sessionID: event.sessionID,
+                      cmd: event.input.command.slice(0, 80),
+                    });
                   }
                 } else if (type === "session.next.tool.success") {
-                  const sid = pendingCommits.get(event.callID);
-                  if (sid) {
+                  const entry = pendingCommits.get(event.callID);
+                  if (entry) {
                     pendingCommits.delete(event.callID);
-                    pendingReminder.add(sid);
+                    pendingReminder.set(entry.sessionID, entry.cmd);
                   }
                 } else if (type === "session.next.tool.failed") {
                   pendingCommits.delete(event.callID);
