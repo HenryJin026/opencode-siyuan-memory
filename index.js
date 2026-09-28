@@ -1,8 +1,8 @@
 // index.js — siyuan-memory 插件入口（OpenCode V2：默认导出 { id, setup }）。
 //
-// 1. 注册 5 个跨项目记忆工具（mem_save / mem_search / mem_read / mem_list /
-//    mem_delete），底层走思源 agent-memory notebook（经 mcptool 代理的
-//    siyuan-mcp-* 工具，见 mcp.js）。
+// 1. 注册 6 个跨项目记忆工具（mem_save / mem_progress / mem_search /
+//    mem_read / mem_list / mem_delete），底层走思源 agent-memory notebook
+//    （经 mcptool 代理的 siyuan-mcp-* 工具，见 mcp.js）。
 // 2. 系统提示注入：每个会话首次模型调用时，把 agent-memory 的标题级记忆索引
 //    推进系统提示（渐进披露：索引只含标题/类型/描述，全文靠 mem_read）。
 //

@@ -1,4 +1,4 @@
-// tools.js — siyuan-memory 的 5 个 mem_* 工具定义（OpenCode V2 形状：
+// tools.js — siyuan-memory 的 6 个 mem_* 工具定义（OpenCode V2 形状：
 // { name, description, input: JSONSchema, execute(input, context) }）。
 //
 // 存储：思源 agent-memory notebook，经 mcptool 代理的 siyuan-mcp-* 工具。
@@ -166,6 +166,40 @@ export function buildMemTools(client) {
     return slugs;
   }
 
+  // 统一的「存一条记忆」底层逻辑（mem_save / mem_progress 共用）：
+  // 建父目录 doc（若缺）→ 删同名旧 doc（覆盖）→ 建新 doc → 打属性。返回新 doc id。
+  async function saveMemory({ project, title, content, memtype, name, description, signal }) {
+    const n = await nb(signal);
+    // 1. 项目目录 doc 必须先存在（思源不自动建父目录）
+    if (!(await docIdByHpath(client, n, `/${project}`, signal))) {
+      await client.callTool(
+        "siyuan-mcp-document",
+        { action: "create", notebook: n, path: "/", title: project },
+        { signal },
+      );
+    }
+    // 2. 同名旧 doc → 删除（覆盖语义）
+    const oldId = await docIdByHpath(client, n, `/${project}/${title}`, signal);
+    if (oldId) {
+      await client.callTool("siyuan-mcp-document", { action: "delete", id: oldId }, { signal });
+    }
+    // 3. 建新 doc（path 传完整路径：父目录段 + 叶子；hpath 叶子 = title）
+    const created = await client.callTool(
+      "siyuan-mcp-document",
+      { action: "create", notebook: n, path: `/${project}/${title}`, title, markdown: content },
+      { signal },
+    );
+    const newId = created.match(/document created: ([0-9a-z-]+)/)?.[1];
+    if (!newId) throw new Error(`document.create 返回无法解析：${created}`);
+    // 4. 打属性（memtype 不是保留键；type 是 SiYuan 保留键，不可用）
+    const attrs = { memtype, project };
+    if (name) attrs.name = name;
+    if (description) attrs.description = description;
+    await client.callTool("siyuan-mcp-attr", { action: "set", id: newId, attrs }, { signal });
+    slugCache = null; // 可能新增项目 slug，失效缓存
+    return newId;
+  }
+
   return {
     mem_save: {
       name: "mem_save",
@@ -198,41 +232,76 @@ export function buildMemTools(client) {
         try {
           const { project, title } = splitFileName(input.file_name);
           const signal = context?.signal;
-          const n = await nb(signal);
-
-          // 1. 项目目录 doc 必须先存在（思源不自动建父目录）
-          if (!(await docIdByHpath(client, n, `/${project}`, signal))) {
-            await client.callTool(
-              "siyuan-mcp-document",
-              { action: "create", notebook: n, path: "/", title: project },
-              { signal },
-            );
-          }
-          // 2. 同名旧 doc → 删除（覆盖语义）
-          const oldId = await docIdByHpath(client, n, `/${project}/${title}`, signal);
-          if (oldId) {
-            await client.callTool("siyuan-mcp-document", { action: "delete", id: oldId }, { signal });
-          }
-          // 3. 建新 doc（path 传完整路径：父目录段 + 叶子；hpath 叶子 = title）
-          const created = await client.callTool(
-            "siyuan-mcp-document",
-            { action: "create", notebook: n, path: `/${project}/${title}`, title, markdown: input.content },
-            { signal },
-          );
-          const newId = created.match(/document created: ([0-9a-z-]+)/)?.[1];
-          if (!newId) throw new Error(`document.create 返回无法解析：${created}`);
-          // 4. 打属性（memtype 不是保留键；type 是 SiYuan 保留键，不可用）
-          const attrs = { memtype: input.type, project };
-          if (input.name) attrs.name = input.name;
-          if (input.description) attrs.description = input.description;
-          await client.callTool("siyuan-mcp-attr", { action: "set", id: newId, attrs }, { signal });
-          slugCache = null; // 可能新增项目 slug，失效缓存
+          const newId = await saveMemory({
+            project,
+            title,
+            content: input.content,
+            memtype: input.type,
+            name: input.name,
+            description: input.description,
+            signal,
+          });
           return {
             content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
           };
         } catch (err) {
           return { content: `mem_save 失败：${err.message}` };
+        }
+      },
+    },
+
+    mem_progress: {
+      name: "mem_progress",
+      description:
+        "记录 / 更新一个项目的「工作状态」快照（<project>/progress，覆盖写，永远只有一份）。" +
+        "跨会话延续用：阶段性工作做到检查点时调用，新会话 mem_read 它就能接上当前状态。" +
+        "content 用 markdown，推荐四段：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文（可选）。",
+      input: {
+        type: "object",
+        properties: {
+          project: {
+            type: "string",
+            description: "项目 slug（如 ninfer、GithubRes-ninfer、daily），单个、不含 /",
+          },
+          content: {
+            type: "string",
+            description:
+              "当前状态 markdown，推荐结构：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文（可选）",
+          },
+          description: {
+            type: "string",
+            description: "可选：一句话当前状态摘要（供索引显示，新会话靠它判断要不要 mem_read 全文）",
+          },
+        },
+        required: ["project", "content"],
+        additionalProperties: false,
+      },
+      async execute(input, context) {
+        try {
+          if (
+            typeof input.project !== "string" ||
+            !input.project.trim() ||
+            input.project.includes("/")
+          ) {
+            throw new Error(`project 需为单个 slug（不含 /）：${input.project}`);
+          }
+          const project = input.project.trim();
+          const signal = context?.signal;
+          const newId = await saveMemory({
+            project,
+            title: "progress",
+            content: input.content,
+            memtype: "project",
+            description: input.description,
+            signal,
+          });
+          return {
+            content: `进度已更新 /${project}/progress（id ${newId}）。` +
+              "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
+          };
+        } catch (err) {
+          return { content: `mem_progress 失败：${err.message}` };
         }
       },
     },

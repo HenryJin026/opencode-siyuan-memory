@@ -1,10 +1,11 @@
 # opencode-siyuan-memory
 
-OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook 作为跨项目记忆后端，提供 5 个 `mem_*` 工具 + 系统提示自动注入标题级记忆索引。
+OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook 作为跨项目记忆后端，提供 6 个 `mem_*` 工具 + 系统提示自动注入标题级记忆索引。
 
 ## 功能
 
-- **5 个记忆工具**：`mem_save` / `mem_search` / `mem_read` / `mem_list` / `mem_delete`
+- **6 个记忆工具**：`mem_save` / `mem_progress` / `mem_search` / `mem_read` / `mem_list` / `mem_delete`
+- **工作状态延续**：`mem_progress` 把阶段性成果 / 进度 / 下一步写成 `<project>/progress` 快照（覆盖写，永远一份）。阶段性工作做到检查点时更新它，新会话 `mem_read` 就能接上当前状态继续推进
 - **自动注入**：每个会话首次模型调用时，把 agent-memory 全量记忆的**标题级索引**（标题 / memtype / 一句话描述）自动注入系统提示——模型开对话就能看到有哪些记忆，需要全文时再 `mem_read` 拉取（渐进披露，token 开销可控）
 - **跨项目**：记忆按 `<project-slug>/<记忆名>` 存思源，任何项目的会话都能搜到
 - **零硬编码凭据**：mcptool 端点与 Bearer token 运行时从 `opencode.json` 读取，token 轮换自动跟随
@@ -30,6 +31,7 @@ OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook
 | 工具 | 用途 |
 |---|---|
 | `mem_save` | 存一条记忆（`file_name` = `<project>/<记忆名>`，末段即 doc 标题；同名覆盖） |
+| `mem_progress` | 记录 / 更新项目「工作状态」快照（`<project>/progress`，覆盖写，永远一份；跨会话延续用） |
 | `mem_search` | 全文搜索（可选按 project 过滤） |
 | `mem_read` | 读一条记忆全文 |
 | `mem_list` | 列出记忆（标题 / 类型 / 描述） |
