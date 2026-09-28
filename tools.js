@@ -93,7 +93,7 @@ export async function buildMemoryIndex(client, { signal, timeoutMs } = {}) {
     timeoutMs,
   );
   if (rows.length === 0) return "";
-  const MAX_LINES = 60;
+  const MAX_LINES = 150;
   const lines = rows.map((r) => {
     const attrs = parseIal(r.ial);
     const desc = attrs.description ? `：${attrs.description}` : "";
