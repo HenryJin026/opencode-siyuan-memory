@@ -115,7 +115,9 @@ export default {
                   if (
                     SHELL_TOOLS.has(event.tool) &&
                     typeof event.input?.command === "string" &&
-                    /\bgit\s+commit(\s|$)/.test(event.input.command)
+                    // 匹配 git [flags] commit（-C/-c/--no-verify 等前置 flag）；
+                    // 非贪婪，副作用是管道里 grep commit 会误判，但 nudge 无害
+                    /\bgit\s+.*?\bcommit(\s|$)/.test(event.input.command)
                   ) {
                     pendingCommits.set(event.callID, {
                       sessionID: event.sessionID,
