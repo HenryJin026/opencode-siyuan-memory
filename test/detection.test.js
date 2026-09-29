@@ -22,6 +22,11 @@ const cases = [
   ["npm test", false, "非 git 命令"],
   ["", false, "空命令"],
   [null, false, "非字符串入参"],
+  // 引号感知分段（2026-09-29 修复误判）
+  ['node -e "git commit -m x"', false, "node -e 字符串参数里的 git commit，不误判"],
+  ['node -e "\ngit add . && git commit -m x\n"', false, "node -e 多行字符串里的 git commit，不误判"],
+  ["git commit -m \"a && b\"", true, "commit 消息含 && 仍在引号内，命中"],
+  ['bash -c "git add . && git commit -m x"', false, "bash -c 字符串参数（已知缺口：段首 bash）"],
 ];
 
 let pass = 0;
