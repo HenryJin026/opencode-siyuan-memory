@@ -103,7 +103,9 @@ export default {
         const cmdSnippet = pendingReminder.get(sid);
         if (cmdSnippet !== undefined) {
           pendingReminder.delete(sid);
-          event.system.push({
+          // unshift 到数组开头（不用 push）：push 会把 nudge 埋在记忆索引等内容之后，
+          // 模型注意不到；放开头确保提醒可见（2026-09-29 探针验证：push 成功但模型没看到）。
+          event.system.unshift({
             type: "text",
             text:
               `刚完成 git commit（${cmdSnippet}）。若本次改动值得记录，请用 mem_progress 更新当前项目的 progress 工作状态快照` +
