@@ -40,6 +40,21 @@ function slugCandidates(dir) {
   return [...new Set(out)];
 }
 
+// 判断一条 shell 命令是否执行了 git commit（commit 提醒 nudge 用）。
+// 按 shell 操作符（| / || / && / ;）分段逐段判断，避免 `git log | grep commit`
+// 这类管道误判；段内要求首 token 是 git 且 commit 为独立 token
+// （`git log --grep=commit` 不误判）。覆盖 `git -C <path> commit` /
+// `git -c x=y commit` / `git --no-verify commit` 等前置 flag 写法。
+function isGitCommitCommand(cmd) {
+  if (typeof cmd !== "string") return false;
+  return cmd
+    .split(/\||\|\||&&|;/)
+    .some((seg) => {
+      const toks = seg.trim().split(/\s+/).filter(Boolean);
+      return toks[0] === "git" && toks.includes("commit");
+    });
+}
+
 export default {
   id: "siyuan-memory",
   async setup(ctx) {
@@ -114,10 +129,7 @@ export default {
                 if (type === "session.next.tool.called") {
                   if (
                     SHELL_TOOLS.has(event.tool) &&
-                    typeof event.input?.command === "string" &&
-                    // 匹配 git [flags] commit（-C/-c/--no-verify 等前置 flag）；
-                    // 非贪婪，副作用是管道里 grep commit 会误判，但 nudge 无害
-                    /\bgit\s+.*?\bcommit(\s|$)/.test(event.input.command)
+                    isGitCommitCommand(event.input?.command)
                   ) {
                     pendingCommits.set(event.callID, {
                       sessionID: event.sessionID,
