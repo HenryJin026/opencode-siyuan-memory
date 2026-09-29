@@ -115,10 +115,14 @@ export default {
 
       // git commit 检测：订阅公开事件流，检测 shell 工具的 git commit 成功，
       // 标记对应 session 待提醒（由上方 context hook 在下次模型调用时注入）。
-      // 事件类型见 opencode 源码 packages/schema/src/session-event.ts。
+      // 事件类型与载荷结构见 opencode 源码 packages/schema/src/session-event.ts
+      // （v2.0.18 实测）：工具事件类型是 session.tool.*（非 session.next.tool.*），
+      // 载荷嵌在 event.data 里；工具名只在 session.tool.input.started 的 data.name，
+      // 需按 data.id（工具调用 ID）关联到 called / success / failed。
       let cleanup = () => {};
       if (typeof ctx.event?.subscribe === "function") {
         const controller = new AbortController();
+        const shellCallIDs = new Set(); // shell 工具调用 ID（来自 input.started 的 data.name）
         const pendingCommits = new Map(); // callID -> { sessionID, cmd }
         const SHELL_TOOLS = new Set(["shell", "bash"]);
         void (async () => {
@@ -126,24 +130,36 @@ export default {
             for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
               try {
                 const type = event?.type;
-                if (type === "session.next.tool.called") {
+                const d = event?.data;
+                if (type === "session.tool.input.started") {
+                  // 工具名只在 input.started 的 data.name；记录 shell 工具调用 ID
+                  if (d?.id && d?.name && SHELL_TOOLS.has(d.name)) {
+                    shellCallIDs.add(d.id);
+                  }
+                } else if (type === "session.tool.called") {
+                  // 入参在 data.input；仅对 shell 工具检查 git commit
                   if (
-                    SHELL_TOOLS.has(event.tool) &&
-                    isGitCommitCommand(event.input?.command)
+                    d?.id &&
+                    shellCallIDs.has(d.id) &&
+                    isGitCommitCommand(d.input?.command)
                   ) {
-                    pendingCommits.set(event.callID, {
-                      sessionID: event.sessionID,
-                      cmd: event.input.command.slice(0, 80),
+                    pendingCommits.set(d.id, {
+                      sessionID: d.sessionID,
+                      cmd: String(d.input?.command ?? "").slice(0, 80),
                     });
                   }
-                } else if (type === "session.next.tool.success") {
-                  const entry = pendingCommits.get(event.callID);
+                } else if (type === "session.tool.success") {
+                  const entry = d?.id ? pendingCommits.get(d.id) : undefined;
                   if (entry) {
-                    pendingCommits.delete(event.callID);
+                    pendingCommits.delete(d.id);
                     pendingReminder.set(entry.sessionID, entry.cmd);
                   }
-                } else if (type === "session.next.tool.failed") {
-                  pendingCommits.delete(event.callID);
+                  if (d?.id) shellCallIDs.delete(d.id);
+                } else if (type === "session.tool.failed") {
+                  if (d?.id) {
+                    pendingCommits.delete(d.id);
+                    shellCallIDs.delete(d.id);
+                  }
                 }
               } catch (err) {
                 console.error(`[siyuan-memory] 处理事件失败：${err.message}`);
