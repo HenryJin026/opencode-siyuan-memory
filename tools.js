@@ -1,7 +1,7 @@
 // tools.js — siyuan-memory 的 6 个 mem_* 工具定义（OpenCode V2 形状：
 // { name, description, input: JSONSchema, execute(input, context) }）。
 //
-// 存储：思源 agent-memory notebook，经 mcptool 代理的 siyuan-mcp-* 工具。
+// 存储：思源 agent-memory notebook，经 alltool 代理的 siyuan-mcp-* 工具。
 // 布局：/<project-slug>/<记忆名>（记忆名 = doc 标题 = hpath 末段）。
 // 属性：memtype（user/feedback/project/reference）+ project + description
 //       落在 blocks.ial（SiYuan 保留键 type 不可用，故用 memtype）。

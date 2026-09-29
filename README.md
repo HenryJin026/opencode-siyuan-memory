@@ -9,12 +9,12 @@ OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook
 - **自动注入**：每个会话首次模型调用时，把 agent-memory 全量记忆的**标题级索引**（标题 / memtype / 一句话描述）自动注入系统提示——模型开对话就能看到有哪些记忆，需要全文时再 `mem_read` 拉取（渐进披露，token 开销可控）
 - **模型调用时 nudge 注入**：`ctx.session.hook("context")` 每次模型调用检查——git commit 成功后提醒用 `mem_progress` 更新 progress 快照（附命令摘要）。为 nudge（不强制），模型自行判断要不要行动
 - **跨项目**：记忆按 `<project-slug>/<记忆名>` 存思源，任何项目的会话都能搜到
-- **零硬编码凭据**：mcptool 端点与 Bearer token 运行时从 `opencode.json` 读取，token 轮换自动跟随
+- **零硬编码凭据**：alltool 端点与 Bearer token 运行时从 `opencode.json` 读取，token 轮换自动跟随
 
 ## 要求
 
 - OpenCode V2（插件 API：`ctx.tool.transform` / `ctx.session.hook` / `ctx.event.subscribe`）
-- `opencode.json` 已配置 `mcp.servers.mcptool`（暴露 `siyuan-mcp-*` 工具的远程 MCP 代理）
+- `opencode.json` 已配置 `mcp.servers.alltool`（暴露 `siyuan-mcp-*` 工具的远程 MCP 代理；旧键名 `mcptool` 仍兼容）
 - 思源实例上存在 `agent-memory` notebook
 
 ## 安装
@@ -40,13 +40,13 @@ OpenCode V2 跨项目记忆插件：以思源（SiYuan）`agent-memory` notebook
 
 ## 工作原理
 
-插件绕过 opencode 的 MCP 层，用纯 `fetch` 直连 mcptool 代理说 MCP streamable-HTTP JSON-RPC（无 MCP SDK 依赖）：
+插件绕过 opencode 的 MCP 层，用纯 `fetch` 直连 alltool 代理说 MCP streamable-HTTP JSON-RPC（无 MCP SDK 依赖）：
 
 1. `initialize` 拿 `Mcp-Session-Id`（懒初始化：首次工具调用 / 首次注入才连）
 2. 调 `siyuan-mcp-*` 工具（`notebook` / `document` / `sql` / `search` / `attr` / `export`）读写 agent-memory notebook
 3. 记忆布局 `/<project-slug>/<记忆名>`（末段 = doc 标题 = hpath 末段）；属性 `memtype` / `project` / `description` 落在 `blocks.ial`（SiYuan 保留键 `type` 不可用，故用 `memtype`）
 
-> **mcptool 代理 = [MCPHub](https://github.com/samanhappy/mcphub)**（自托管 MCP 网关）：本机 MCP 工具统一经它的**分组路由**接入（`/mcp/{group}` 等稳定端点）。插件连到对应 group 端点、经网关发 `tools/call`（MCP 协议调工具的标准 JSON-RPC 方法）调 `siyuan-mcp-*` 工具；若 siyuan-mcp 直连（不经网关）则用不到经网关这一步。
+> **alltool 代理 = [MCPHub](https://github.com/samanhappy/mcphub)**（自托管 MCP 网关，旧名 mcptool）：本机 MCP 工具统一经它的**分组路由**接入（`/mcp/{group}` 等稳定端点）。插件连到对应 group 端点、经网关发 `tools/call`（MCP 协议调工具的标准 JSON-RPC 方法）调 `siyuan-mcp-*` 工具；若 siyuan-mcp 直连（不经网关）则用不到经网关这一步。
 
 ### 注入设计
 

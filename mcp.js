@@ -1,10 +1,10 @@
 // mcp.js — 极简 MCP streamable-HTTP 客户端（纯 fetch，无 MCP SDK 依赖）。
 //
-// 用途：让 siyuan-memory 插件绕过 opencode 的 MCP 层，直接对 mcptool 代理
-// （opencode.json 里 mcp.servers.mcptool 配置的远程端点）发 JSON-RPC，
-// 从而在插件里调用 siyuan-mcp-* 工具。
+// 用途：让 siyuan-memory 插件绕过 opencode 的 MCP 层，直接对 alltool 代理
+// （opencode.json 里 mcp.servers.alltool 配置的远程端点，旧键名 mcptool）
+// 发 JSON-RPC，从而在插件里调用 siyuan-mcp-* 工具。
 //
-// mcptool 代理 = MCPHub（mcphub，github.com/samanhappy/mcphub）：自托管 MCP 网关，
+// alltool 代理 = MCPHub（mcphub，github.com/samanhappy/mcphub）：自托管 MCP 网关，
 // 把多个后端 MCP server（含 siyuan-mcp）按分组路由暴露成稳定端点（/mcp/{group} 等）。
 // 插件连到对应 group 端点、经网关发 tools/call（MCP 协议调工具的标准 JSON-RPC 方法）
 // 调 siyuan-mcp-* 工具；若 siyuan-mcp 直连（不经网关）则用不到经网关这一步。
@@ -23,13 +23,16 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 let rpcId = 0;
 
-// 从全局 opencode.json 读 mcptool 端点 + 凭据（token 轮换后自动跟随，不硬编码）。
+// 从全局 opencode.json 读 alltool 端点 + 凭据（token 轮换后自动跟随，不硬编码）。
+// 键名优先 alltool（2026-09 起 opencode.json 由 mcptool 改名而来），
+// 回退 mcptool 以兼容旧配置。
 export function loadMcpConfig() {
   const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-  const s = cfg.mcp?.servers?.mcptool;
-  if (!s?.url) throw new Error("mcptool: opencode.json 里找不到 mcp.servers.mcptool.url");
+  const s = cfg.mcp?.servers?.alltool ?? cfg.mcp?.servers?.mcptool;
+  if (!s?.url)
+    throw new Error("alltool: opencode.json 里找不到 mcp.servers.alltool.url（回退键 mcp.servers.mcptool 亦缺失）");
   const auth = s.headers?.Authorization;
-  if (!auth) throw new Error("mcptool: opencode.json 里找不到 Authorization header");
+  if (!auth) throw new Error("alltool: opencode.json 里找不到 Authorization header");
   return { url: s.url, auth };
 }
 
@@ -51,7 +54,7 @@ function parseBody(text) {
 
 async function postJson(url, auth, method, params, sessionId, outerSignal, timeoutMs) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error(`mcptool 请求超时（${timeoutMs}ms）`)), timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(new Error(`alltool 请求超时（${timeoutMs}ms）`)), timeoutMs);
   const onOuterAbort = () => ctrl.abort();
   if (outerSignal) {
     if (outerSignal.aborted) ctrl.abort();
@@ -96,10 +99,10 @@ export class McpClient {
       signal,
       DEFAULT_TIMEOUT_MS,
     );
-    if (!res.ok) throw new Error(`mcptool initialize 失败：HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`alltool initialize 失败：HTTP ${res.status}`);
     const sid = res.headers.get("mcp-session-id");
     await res.text(); // 排空 body
-    if (!sid) throw new Error("mcptool initialize 未返回 Mcp-Session-Id");
+    if (!sid) throw new Error("alltool initialize 未返回 Mcp-Session-Id");
     this.sessionId = sid;
   }
 
@@ -114,15 +117,15 @@ export class McpClient {
     await this.initPromise;
   }
 
-  // 调用 mcptool 代理上的工具（如 siyuan-mcp-document），返回其文本结果。
+  // 调用 alltool 代理上的工具（如 siyuan-mcp-document），返回其文本结果。
   async callTool(name, args, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     await this.ensureInit(signal);
     const { url, auth } = loadMcpConfig();
     const res = await postJson(url, auth, "tools/call", { name, arguments: args }, this.sessionId, signal, timeoutMs);
-    if (!res.ok) throw new Error(`mcptool ${name} 失败：HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`alltool ${name} 失败：HTTP ${res.status}`);
     const msg = parseBody(await res.text());
-    if (!msg) throw new Error(`mcptool ${name}：响应无法解析`);
-    if (msg.error) throw new Error(`mcptool ${name} 报错：${JSON.stringify(msg.error)}`);
+    if (!msg) throw new Error(`alltool ${name}：响应无法解析`);
+    if (msg.error) throw new Error(`alltool ${name} 报错：${JSON.stringify(msg.error)}`);
     const content = msg.result?.content;
     if (Array.isArray(content)) return content.map((c) => c.text ?? JSON.stringify(c)).join("\n");
     return msg.result === undefined ? "" : JSON.stringify(msg.result);
