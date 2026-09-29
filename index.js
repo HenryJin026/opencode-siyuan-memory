@@ -41,14 +41,16 @@ function slugCandidates(dir) {
 }
 
 // 判断一条 shell 命令是否执行了 git commit（commit 提醒 nudge 用）。
-// 按 shell 操作符（| / || / && / ;）分段逐段判断，避免 `git log | grep commit`
+// 按 shell 操作符（| / || / && / ;）和换行分段逐段判断，避免 `git log | grep commit`
 // 这类管道误判；段内要求首 token 是 git 且 commit 为独立 token
 // （`git log --grep=commit` 不误判）。覆盖 `git -C <path> commit` /
 // `git -c x=y commit` / `git --no-verify commit` 等前置 flag 写法。
+// 换行也作分段符：shell 工具常以多行脚本形式跑命令，`git commit` 往往独占一行，
+// 若不分换行，它会和前面的行粘在同一段、段首 token 不是 git 而漏检（2026-09-29 实测）。
 function isGitCommitCommand(cmd) {
   if (typeof cmd !== "string") return false;
   return cmd
-    .split(/\||\|\||&&|;/)
+    .split(/\||\|\||&&|;|\r?\n/)
     .some((seg) => {
       const toks = seg.trim().split(/\s+/).filter(Boolean);
       return toks[0] === "git" && toks.includes("commit");
@@ -103,15 +105,15 @@ export default {
         const cmdSnippet = pendingReminder.get(sid);
         if (cmdSnippet !== undefined) {
           pendingReminder.delete(sid);
-          // unshift 到数组开头（不用 push）：push 会把 nudge 埋在记忆索引等内容之后，
-          // 模型注意不到；放开头确保提醒可见（2026-09-29 探针验证：push 成功但模型没看到）。
-          event.system.unshift({
-            type: "text",
-            text:
-              `刚完成 git commit（${cmdSnippet}）。若本次改动值得记录，请用 mem_progress 更新当前项目的 progress 工作状态快照` +
-              "（推荐四段：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文）。",
-          });
-          console.log(`[siyuan-memory] 已向会话 ${sid} 注入 commit 提醒`);
+          // 用 event.messages 注入一条 system 角色消息（不用 event.system）：
+          // system 提示数组的改动在本 setup 里对模型不可见（2026-09-29 验证：push/unshift
+          // 都看不到 nudge），而对话历史里的消息一定会被渲染进模型上下文。Message.system
+          // 就是为「在对话时间线上插入 operator 指令」设计的机制（见 @opencode/ai messages.ts）。
+          const nudgeText =
+            `刚完成 git commit（${cmdSnippet}）。若本次改动值得记录，请用 mem_progress 更新当前项目的 progress 工作状态快照` +
+            "（推荐四段：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键上下文）。";
+          event.messages.push({ role: "system", content: [{ type: "text", text: nudgeText }] });
+          console.log(`[siyuan-memory] 已向会话 ${sid} 注入 commit 提醒（messages）`);
         }
       });
 
