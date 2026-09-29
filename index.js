@@ -26,6 +26,7 @@
 
 import { McpClient } from "./mcp.js";
 import { buildMemTools, buildMemoryIndex } from "./tools.js";
+import { isGitCommitCommand } from "./detection.js";
 
 // 从会话目录推导当前项目的 slug 候选（对齐迁移规则：末段 + 父段-末段，
 // 覆盖消歧 slug，如 D:\...\GithubRes\ninfer → ["ninfer", "GithubRes-ninfer"]）。
@@ -38,23 +39,6 @@ function slugCandidates(dir) {
   const out = [last];
   if (segs.length >= 2) out.push(`${segs[segs.length - 2]}-${last}`);
   return [...new Set(out)];
-}
-
-// 判断一条 shell 命令是否执行了 git commit（commit 提醒 nudge 用）。
-// 按 shell 操作符（| / || / && / ;）和换行分段逐段判断，避免 `git log | grep commit`
-// 这类管道误判；段内要求首 token 是 git 且 commit 为独立 token
-// （`git log --grep=commit` 不误判）。覆盖 `git -C <path> commit` /
-// `git -c x=y commit` / `git --no-verify commit` 等前置 flag 写法。
-// 换行也作分段符：shell 工具常以多行脚本形式跑命令，`git commit` 往往独占一行，
-// 若不分换行，它会和前面的行粘在同一段、段首 token 不是 git 而漏检（2026-09-29 实测）。
-function isGitCommitCommand(cmd) {
-  if (typeof cmd !== "string") return false;
-  return cmd
-    .split(/\||\|\||&&|;|\r?\n/)
-    .some((seg) => {
-      const toks = seg.trim().split(/\s+/).filter(Boolean);
-      return toks[0] === "git" && toks.includes("commit");
-    });
 }
 
 export default {
