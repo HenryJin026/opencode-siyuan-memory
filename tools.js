@@ -428,7 +428,7 @@ export function buildMemTools(client) {
           const n = await nb(signal);
           const project = _input?.project;
           const stmt =
-            `SELECT id, hpath, ial FROM blocks WHERE box='${n}' AND type='d'` +
+            `SELECT id, hpath, ial FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%'` +
             (project ? ` AND ial LIKE '%project="${project}"%'` : "");
           const rows = await sql(client, stmt, signal);
           if (rows.length === 0) return { content: project ? `项目 ${project} 下还没有记忆。` : "agent-memory 里还没有记忆。" };
