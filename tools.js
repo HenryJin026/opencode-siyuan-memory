@@ -167,8 +167,59 @@ export function buildMemTools(client) {
   }
 
   // 统一的「存一条记忆」底层逻辑（mem_save / mem_progress 共用）：
-  // 建父目录 doc（若缺）→ 删同名旧 doc（覆盖）→ 建新 doc → 打属性。返回新 doc id。
-  async function saveMemory({ project, title, content, memtype, name, description, signal }) {
+  // 建父目录 doc（若缺）→ 去重父目录 → 删同名旧 doc（覆盖）→ 建新 doc → 打属性。
+  // 返回新 doc id。
+  //
+  // 串行化：saveMemory 全程持锁。并发 mem_save / mem_progress 对同一新项目的
+  // 「父目录不存在」检查会同时通过、双双创建 → 重复父目录 doc（2026-10-08
+  // GithubRes-ninfer-custom 双目录事故根因：两个 doc 同时间戳 20261008193814）。
+  // 串行后检查-创建不再交错。
+  let saveChain = Promise.resolve();
+  function withSaveLock(fn) {
+    const run = saveChain.then(() => fn());
+    saveChain = run.then(
+      () => {},
+      () => {},
+    ); // 前一个失败不污染后续
+    return run;
+  }
+
+  // 同一 hpath 下若有多个 doc（并发创建 / 历史残留），保留子文档最多的那个
+  // （真容器），删掉其余（空壳）。必须在建叶子 doc 之前调用，否则新叶子可能
+  // 挂到将被删的空壳下。无重复时仅一次 SQL 查询即返回（开销可忽略）。
+  async function dedupHpath(n, hpath, signal) {
+    const rows = await sql(
+      client,
+      `SELECT id FROM blocks WHERE box='${n}' AND hpath='${hpath}' AND type='d'`,
+      signal,
+    );
+    if (rows.length < 2) return;
+    let keep = rows[0].id;
+    let keepCount = -1;
+    for (const r of rows) {
+      const kids = await sql(
+        client,
+        `SELECT COUNT(*) AS n FROM blocks WHERE box='${n}' AND path LIKE '/${r.id}/%' AND type='d'`,
+        signal,
+      );
+      const c = Number(kids[0]?.n ?? 0);
+      if (c > keepCount) {
+        keepCount = c;
+        keep = r.id;
+      }
+    }
+    for (const r of rows) {
+      if (r.id !== keep) {
+        await client.callTool("siyuan-mcp-document", { action: "delete", id: r.id }, { signal });
+      }
+    }
+  }
+
+  async function saveMemory(args) {
+    return withSaveLock(() => doSaveMemory(args));
+  }
+
+  async function doSaveMemory({ project, title, content, memtype, name, description, signal }) {
     const n = await nb(signal);
     // 1. 项目目录 doc 必须先存在（思源不自动建父目录）
     if (!(await docIdByHpath(client, n, `/${project}`, signal))) {
@@ -178,6 +229,8 @@ export function buildMemTools(client) {
         { signal },
       );
     }
+    // 1b. 去重父目录：若存在重复 doc（并发创建 / 历史残留），保留有子文档的，删空壳
+    await dedupHpath(n, `/${project}`, signal);
     // 2. 同名旧 doc → 删除（覆盖语义）
     const oldId = await docIdByHpath(client, n, `/${project}/${title}`, signal);
     if (oldId) {
