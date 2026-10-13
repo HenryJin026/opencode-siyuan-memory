@@ -82,21 +82,21 @@ function splitFileName(fileName) {
 
 // ---------- 系统提示注入用：标题级记忆索引 ----------
 
-// 生成 agent-memory 全量记忆的标题级索引（渐进披露：只给标题/类型/描述，
-// 全文靠 mem_read）。空库返回 ""（不注入无意义内容）。
-//
-// projectCandidates：当前项目的 slug 候选（如 ["daily"] 或 ["GithubRes-ninfer"]）。
-// 命中时走混合格式：当前项目带描述 + 其它项目只留标题（省 token）；
-// 全部未命中时退回全量带描述索引（兜底，不比不传候选差）。
-export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandidates } = {}) {
+// 拉全量记忆行（网络 I/O）。返回 [{ id, hpath, ial }, ...]。
+export async function fetchMemoryRows(client, { signal, timeoutMs } = {}) {
   const n = await notebookId(client, signal);
-  const rows = await sql(
+  return sql(
     client,
     `SELECT id, hpath, ial FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%'`,
     signal,
     timeoutMs,
   );
-  if (rows.length === 0) return "";
+}
+
+// 纯本地格式化：按 projectCandidates 切分 + 拼装索引文本（无网络 I/O）。
+// 空行返回 ""（不注入无意义内容）。
+export function formatMemoryIndex(rows, projectCandidates) {
+  if (!rows || rows.length === 0) return "";
 
   const MAX_LINES = 150;
   const withDesc = (r) => {
@@ -109,7 +109,6 @@ export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandi
     return `- ${r.hpath} (${attrs.memtype ?? "?"})`;
   };
 
-  // 混合模式：当前项目（带描述）+ 其它项目（仅标题）
   if (projectCandidates?.length) {
     const isCurrent = (r) => projectCandidates.includes(parseIal(r.ial).project);
     const current = rows.filter(isCurrent);
@@ -127,7 +126,6 @@ export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandi
         "需要全文用 mem_read（file_name = <project>/<记忆名>）；按关键词用 mem_search。"
       );
     }
-    // 当前项目无记忆 → 落到下方全量索引
   }
 
   const lines = rows.map(withDesc);
@@ -141,7 +139,13 @@ export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandi
   );
 }
 
-export function buildMemTools(client) {
+// 兼容入口：fetch + format。
+export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandidates } = {}) {
+  const rows = await fetchMemoryRows(client, { signal, timeoutMs });
+  return formatMemoryIndex(rows, projectCandidates);
+}
+
+export function buildMemTools(client, onWrite) {
   let cachedNb = null;
   const nb = async (signal) => (cachedNb ??= await notebookId(client, signal));
 
@@ -294,6 +298,7 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
+          try { await onWrite?.(); } catch (e) { console.log(`[siyuan-memory] 缓存刷新失败（不影响写入）：${e.message}`); }
           return {
             content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -355,6 +360,7 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
+          try { await onWrite?.(); } catch (e) { console.log(`[siyuan-memory] 缓存刷新失败（不影响写入）：${e.message}`); }
           return {
             content: `进度已更新 /${project}/progress（id ${newId}）。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -517,6 +523,7 @@ export function buildMemTools(client) {
           const id = await docIdByHpath(client, n, `/${project}/${title}`, signal);
           if (!id) return { content: `找不到记忆 ${input.file_name}，无需删除。` };
           await client.callTool("siyuan-mcp-document", { action: "delete", id }, { signal });
+          try { await onWrite?.(); } catch (e) { console.log(`[siyuan-memory] 缓存刷新失败（不影响删除）：${e.message}`); }
           return { content: `记忆 ${input.file_name} 已删除（id ${id}）。` };
         } catch (err) {
           return { content: `mem_delete 失败：${err.message}` };
