@@ -6,7 +6,7 @@
 // 2. 系统提示注入：每次模型调用时，把 agent-memory 的标题级记忆索引
 //    推进系统提示（渐进披露：索引只含标题/类型/描述，全文靠 mem_read）。
 //    索引来源：本地缓存文件（.index-cache.json），首次调用时新鲜拉取并写缓存，
-//    后续调用只读缓存；写操作（mem_save/mem_progress/mem_delete）后刷新缓存。
+//    后续调用只读缓存（会话内不刷新，新记忆下个会话才出现）。
 // 3. git commit 提醒：订阅公开事件流，检测到 shell 工具的 git commit 成功后，
 //    在下次模型调用时经 context hook 注入一句「考虑用 mem_progress 更新
 //    progress 快照」的提醒（nudge，不强制；模型自行判断要不要更新）。
@@ -76,15 +76,7 @@ export default {
         return;
       }
       const client = new McpClient();
-      async function refreshCache() {
-        try {
-          const rows = await fetchMemoryRows(client);
-          writeCache(rows);
-        } catch (err) {
-          console.log(`[siyuan-memory] 缓存刷新失败：${err.message}`);
-        }
-      }
-      const tools = buildMemTools(client, refreshCache);
+      const tools = buildMemTools(client);
       await ctx.tool.transform((editor) => {
         for (const def of Object.values(tools)) editor.add(def);
       });

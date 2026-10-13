@@ -145,7 +145,7 @@ export async function buildMemoryIndex(client, { signal, timeoutMs, projectCandi
   return formatMemoryIndex(rows, projectCandidates);
 }
 
-export function buildMemTools(client, onWrite) {
+export function buildMemTools(client) {
   let cachedNb = null;
   const nb = async (signal) => (cachedNb ??= await notebookId(client, signal));
 
@@ -298,7 +298,6 @@ export function buildMemTools(client, onWrite) {
             description: input.description,
             signal,
           });
-          try { await onWrite?.(); } catch (e) { console.log(`[siyuan-memory] 缓存刷新失败（不影响写入）：${e.message}`); }
           return {
             content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -360,7 +359,6 @@ export function buildMemTools(client, onWrite) {
             description: input.description,
             signal,
           });
-          try { await onWrite?.(); } catch (e) { console.log(`[siyuan-memory] 缓存刷新失败（不影响写入）：${e.message}`); }
           return {
             content: `进度已更新 /${project}/progress（id ${newId}）。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -523,7 +521,6 @@ export function buildMemTools(client, onWrite) {
           const id = await docIdByHpath(client, n, `/${project}/${title}`, signal);
           if (!id) return { content: `找不到记忆 ${input.file_name}，无需删除。` };
           await client.callTool("siyuan-mcp-document", { action: "delete", id }, { signal });
-          try { await onWrite?.(); } catch (e) { console.log(`[siyuan-memory] 缓存刷新失败（不影响删除）：${e.message}`); }
           return { content: `记忆 ${input.file_name} 已删除（id ${id}）。` };
         } catch (err) {
           return { content: `mem_delete 失败：${err.message}` };
