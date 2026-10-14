@@ -78,7 +78,12 @@ export default {
       const client = new McpClient();
       const tools = buildMemTools(client);
       await ctx.tool.transform((editor) => {
-        for (const def of Object.values(tools)) editor.add(def);
+        // 显式声明 codemode:false：让 mem_* 作为原生工具直连，而不是被塞进
+        // execute 的 Code Mode 脚本运行时（opencode v2 默认把插件工具放进
+        // Code Mode，除非显式声明 options.codemode === false）。
+        for (const def of Object.values(tools)) {
+          editor.add({ ...def, options: { codemode: false } });
+        }
       });
 
       // 系统提示注入（每会话一次）
