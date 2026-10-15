@@ -311,6 +311,7 @@ export function buildMemTools(client) {
         "把一条跨项目记忆存入思源 agent-memory notebook（mem_* 系列的写入口）。" +
         "file_name 形如 <project>/<记忆名>——末段即思源 doc 标题（= hpath 末段），" +
         "mem_read / mem_delete 都按这个 file_name 定位。" +
+        "创建新项目 slug 时，从当前工作目录末段推导（= 仓库文件夹名，不带 父段- 前缀；当前目录见 env 块 / Get-Location）；例：工作目录 D:/.../GithubRes/ninfer → slug ninfer。" +
         "同名记忆已存在时覆盖（旧 doc 删除后重建）。" +
         "仅在用户明确要求记住某事时调用；先用 mem_list / mem_search 查重。",
       input: {
@@ -368,6 +369,7 @@ export function buildMemTools(client) {
       description:
         "记录 / 更新一个项目的「工作状态」快照（<project>/progress，覆盖写，永远只有一份）。" +
         "跨会话延续用：阶段性工作做到检查点时调用，新会话 mem_read 它就能接上当前状态。" +
+        "project slug 从当前工作目录末段推导（= 仓库文件夹名，不带 父段- 前缀；当前目录见 env 块 / Get-Location）。" +
         "content 用 markdown，按 5 节模板写（空节省略）：## 当前状态 / ## 已完成 / ## 下一步 / ## 关键决策 / ## 关键上下文。" +
         "边界——当前状态=现在时事实；已完成=过去时工作项（一条一个，不放状态/流程说明）；下一步=将来时动作；关键决策=取舍记录（选了什么+为什么）；关键上下文=背景参考。",
       input: {
