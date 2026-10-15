@@ -673,6 +673,9 @@ export function buildMemTools(client) {
           await client.callTool("siyuan-mcp-document", { action: "delete", id }, { signal });
           // GC：删叶子后父目录若零子文档（空壳），一并删掉，不留 /<project> 空壳。
           await gcEmptyParent(n, usedProject, signal);
+          // 失效 slug 缓存：删除后该项目 slug 可能不再存在，下次 projectSlugs() 重查拿最新集合
+          // （否则删掉的 slug 会留在缓存里最多 5 分钟 TTL，期间用同 slug 再存会误判为已有项目、不触发硬拦截）
+          slugCache = null;
           return { content: `记忆 ${input.file_name} 已删除（id ${id}）。` };
         } catch (err) {
           return { content: `mem_delete 失败：${err.message}` };

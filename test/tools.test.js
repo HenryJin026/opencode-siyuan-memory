@@ -380,6 +380,23 @@ async function run() {
     );
   }
 
+  // ---- 测试 10：mem_delete 失效缓存——删后同 slug 再存触发硬拦截 ----
+  {
+    const client = new MockSiyuan();
+    const tools = buildMemTools(client);
+    // 建项目（预置缓存含 delproj）
+    await tools.mem_save.execute({ file_name: "delproj/mem-a", type: "project", content: "a", newProject: true }, {});
+    // 删掉（失效缓存）
+    await tools.mem_delete.execute({ file_name: "delproj/mem-a" }, {});
+    // 同 slug 再存（不传 newProject）→ 缓存已失效，重查拿最新集合（不含 delproj）→ 触发硬拦截
+    const r = await tools.mem_save.execute({ file_name: "delproj/mem-b", type: "project", content: "b" }, {});
+    check(
+      "删后同 slug 再存触发硬拦截（缓存已失效）",
+      typeof r?.content === "string" && r.content.includes("未创建") && r.content.includes("newProject"),
+      `返回：${r?.content}`,
+    );
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
