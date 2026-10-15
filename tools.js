@@ -348,7 +348,11 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
-          const note = normalized ? `（slug 已归一：${rawProject} → ${project}）` : "";
+          // 写入校验：slug 不匹配任何已有项目 → 提示「新 slug」，防 typo 静默分裂
+          const isNew = !slugs.has(project);
+          let note = "";
+          if (normalized) note += `（slug 已归一：${rawProject} → ${project}）`;
+          if (isNew) note += "（新 slug，未匹配到已有项目，确认是新建？）";
           return {
             content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）${note}。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -413,7 +417,11 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
-          const note = normalized ? `（slug 已归一：${rawProject} → ${project}）` : "";
+          // 写入校验：slug 不匹配任何已有项目 → 提示「新 slug」，防 typo 静默分裂
+          const isNew = !slugs.has(project);
+          let note = "";
+          if (normalized) note += `（slug 已归一：${rawProject} → ${project}）`;
+          if (isNew) note += "（新 slug，未匹配到已有项目，确认是新建？）";
           return {
             content: `进度已更新 /${project}/progress（id ${newId}）${note}。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -526,7 +534,28 @@ export function buildMemTools(client) {
             id = await docIdByHpath(client, n, `/${a}/${title}`, signal);
             if (id) break;
           }
-          if (!id) return { content: `找不到记忆 ${input.file_name}（agent-memory 里没有这个 doc）。` };
+          if (!id) {
+            // 读取模糊兜底：同标题（任意项目）+ 该项目下其它记忆，供模型选对，而非静默 not found
+            const byTitle = await sql(
+              client,
+              `SELECT hpath FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%' AND hpath LIKE '%/${title}'`,
+              signal,
+            );
+            const byProject = await sql(
+              client,
+              `SELECT hpath FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%' AND hpath LIKE '/${rawProject}/%'`,
+              signal,
+            );
+            const suggestions = [...new Set([...byTitle, ...byProject].map((r) => r.hpath))].slice(0, 10);
+            if (suggestions.length > 0) {
+              return {
+                content:
+                  `找不到记忆 ${input.file_name}。相近的有：\n${suggestions.map((s) => `- ${s}`).join("\n")}\n` +
+                  "用 mem_read 传正确的 file_name 重读。",
+              };
+            }
+            return { content: `找不到记忆 ${input.file_name}（agent-memory 里没有这个 doc，也没有相近的）。` };
+          }
           const md = await client.callTool("siyuan-mcp-export", { action: "md", id }, { signal });
           return { content: md };
         } catch (err) {

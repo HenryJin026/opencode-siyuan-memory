@@ -79,16 +79,30 @@ class MockSiyuan {
     return out;
   }
   sqlQuery(stmt) {
-    // 1. projectSlugs：SELECT hpath FROM blocks WHERE ... ial LIKE '%memtype=%'
-    if (/^SELECT hpath FROM blocks/.test(stmt) && /memtype/.test(stmt)) {
+    // 1. projectSlugs：SELECT hpath FROM blocks WHERE ... ial LIKE '%memtype=%'（无 hpath LIKE）
+    if (/^SELECT hpath FROM blocks/.test(stmt) && /memtype/.test(stmt) && !/hpath LIKE/.test(stmt)) {
       const rows = this.memoryDocs();
       if (rows.length === 0) return "no results";
       return `| hpath |\n|---|\n${rows.map((r) => `| ${r.hpath} |`).join("\n")}`;
     }
-    // 2. mem_list：SELECT id, hpath, ial FROM blocks WHERE ... memtype [AND (project 过滤)]
+    // 2. 模糊兜底 byTitle：SELECT hpath FROM blocks ... hpath LIKE '%/<title>'
+    let m = stmt.match(/hpath LIKE '%\/([^']+)'/);
+    if (m && /SELECT hpath FROM blocks/.test(stmt)) {
+      const rows = this.memoryDocs().filter((r) => r.hpath.endsWith(`/${m[1]}`));
+      if (rows.length === 0) return "no results";
+      return `| hpath |\n|---|\n${rows.map((r) => `| ${r.hpath} |`).join("\n")}`;
+    }
+    // 3. 模糊兜底 byProject：SELECT hpath FROM blocks ... hpath LIKE '/<project>/%'
+    m = stmt.match(/hpath LIKE '\/([^']+)\/%'/);
+    if (m && /SELECT hpath FROM blocks/.test(stmt)) {
+      const rows = this.memoryDocs().filter((r) => r.hpath.startsWith(`/${m[1]}/`));
+      if (rows.length === 0) return "no results";
+      return `| hpath |\n|---|\n${rows.map((r) => `| ${r.hpath} |`).join("\n")}`;
+    }
+    // 4. mem_list：SELECT id, hpath, ial FROM blocks WHERE ... memtype [AND (project 过滤)]
     if (/^SELECT id, hpath, ial FROM blocks/.test(stmt) && /memtype/.test(stmt)) {
       let rows = this.memoryDocs();
-      const projMatches = [...stmt.matchAll(/project="([^"]+)"/g)].map((m) => m[1]);
+      const projMatches = [...stmt.matchAll(/project="([^"]+)"/g)].map((mm) => mm[1]);
       if (projMatches.length > 0) {
         rows = rows.filter((r) => projMatches.includes(this.project.get(r.id)));
       }
@@ -100,14 +114,14 @@ class MockSiyuan {
           .join("\n")
       );
     }
-    // 3. docIdByHpath / gcEmptyParent：SELECT id FROM blocks WHERE ... hpath='HP'
-    let m = stmt.match(/hpath='([^']+)'/);
+    // 5. docIdByHpath / gcEmptyParent：SELECT id FROM blocks WHERE ... hpath='HP'
+    m = stmt.match(/hpath='([^']+)'/);
     if (m && /SELECT id FROM blocks/.test(stmt)) {
       const docs = this.docs.get(m[1]) ?? [];
       if (docs.length === 0) return "no results";
       return `| id |\n|---|\n${docs.map((d) => `| ${d.id} |`).join("\n")}`;
     }
-    // 4. childCount：SELECT COUNT(*) AS n FROM blocks WHERE ... path LIKE '/ID/%'
+    // 6. childCount：SELECT COUNT(*) AS n FROM blocks WHERE ... path LIKE '/ID/%'
     m = stmt.match(/path LIKE '\/([^']+)\/%'/);
     if (m && /COUNT\(\*\)/.test(stmt)) {
       const count = (this.children.get(m[1]) ?? new Set()).size;
@@ -323,6 +337,37 @@ async function run() {
       "normalizeSlug：父段-末段输入归一到末段",
       normalizeSlug("GithubRes-Infernix", new Set(["Infernix", "GithubRes-Infernix"])) === "Infernix",
       normalizeSlug("GithubRes-Infernix", new Set(["Infernix", "GithubRes-Infernix"])),
+    );
+  }
+
+  // ---- 测试 8：写入校验——全新 slug 带「新 slug」警告，已有项目不带 ----
+  {
+    const client = new MockSiyuan();
+    const tools = buildMemTools(client);
+    const r = await tools.mem_save.execute({ file_name: "brandnewproj/mem-x", type: "project", content: "x" }, {});
+    check(
+      "全新 slug 带「新 slug」警告",
+      typeof r?.content === "string" && r.content.includes("新 slug"),
+      `返回：${r?.content}`,
+    );
+    const r2 = await tools.mem_save.execute({ file_name: "brandnewproj/mem-y", type: "project", content: "y" }, {});
+    check(
+      "已有项目不带「新 slug」警告",
+      typeof r2?.content === "string" && !r2.content.includes("新 slug"),
+      `返回：${r2?.content}`,
+    );
+  }
+
+  // ---- 测试 9：读取模糊兜底——读不到时返回相近匹配 ----
+  {
+    const client = new MockSiyuan();
+    const tools = buildMemTools(client);
+    await tools.mem_save.execute({ file_name: "projA/real-mem", type: "project", content: "x" }, {});
+    const r = await tools.mem_read.execute({ file_name: "projA/wrong-title" }, {});
+    check(
+      "读不到时返回相近匹配（含同项目其它记忆）",
+      typeof r?.content === "string" && r.content.includes("相近的有") && r.content.includes("/projA/real-mem"),
+      `返回：${r?.content}`,
     );
   }
 
