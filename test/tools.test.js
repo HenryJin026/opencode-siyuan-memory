@@ -7,16 +7,20 @@
 // 本测试用 mock client 模拟思源状态，验证：
 //   1. 并发保存同一新项目 → 恰好一个父目录 doc（串行化生效）
 //   2. 历史重复父目录 → 去重保留有子文档的真容器、删空壳
-import { buildMemTools } from "../tools.js";
+import { buildMemTools, slugAliases, normalizeSlug } from "../tools.js";
 
 // ---------- mock SiYuan 状态机 ----------
 // docs: Map<hpath, Array<{id}>>（允许同 hpath 多个，模拟重复创建）
 // children: Map<parentId, Set<childId>>
+// memtype: Set<id>（有 memtype 属性 = 记忆 doc，非父目录空壳）
+// project: Map<id, slug>（attr set 时记录的 project 属性）
 class MockSiyuan {
   constructor() {
     this.nb = "nb-test";
     this.docs = new Map();
     this.children = new Map();
+    this.memtype = new Set();
+    this.project = new Map();
     this.idSeq = 0;
   }
   nextId() {
@@ -40,6 +44,8 @@ class MockSiyuan {
       if (arr.length === 0) this.docs.delete(hpath);
     }
     for (const set of this.children.values()) set.delete(id);
+    this.memtype.delete(id);
+    this.project.delete(id);
   }
   docCreate(args) {
     // args: { notebook, path, title }。path 语义（对齐 saveMemory 用法）：
@@ -64,15 +70,44 @@ class MockSiyuan {
     }
     return this.addDoc(hpath, parentId);
   }
+  // 所有记忆 doc（有 memtype 的）：[{ id, hpath }]
+  memoryDocs() {
+    const out = [];
+    for (const [hpath, arr] of this.docs) {
+      for (const d of arr) if (this.memtype.has(d.id)) out.push({ id: d.id, hpath });
+    }
+    return out;
+  }
   sqlQuery(stmt) {
-    // 1. SELECT id FROM blocks WHERE box='NB' AND hpath='HP' AND type='d'
+    // 1. projectSlugs：SELECT hpath FROM blocks WHERE ... ial LIKE '%memtype=%'
+    if (/^SELECT hpath FROM blocks/.test(stmt) && /memtype/.test(stmt)) {
+      const rows = this.memoryDocs();
+      if (rows.length === 0) return "no results";
+      return `| hpath |\n|---|\n${rows.map((r) => `| ${r.hpath} |`).join("\n")}`;
+    }
+    // 2. mem_list：SELECT id, hpath, ial FROM blocks WHERE ... memtype [AND (project 过滤)]
+    if (/^SELECT id, hpath, ial FROM blocks/.test(stmt) && /memtype/.test(stmt)) {
+      let rows = this.memoryDocs();
+      const projMatches = [...stmt.matchAll(/project="([^"]+)"/g)].map((m) => m[1]);
+      if (projMatches.length > 0) {
+        rows = rows.filter((r) => projMatches.includes(this.project.get(r.id)));
+      }
+      if (rows.length === 0) return "no results";
+      return (
+        `| id | hpath | ial |\n|---|---|---|\n` +
+        rows
+          .map((r) => `| ${r.id} | ${r.hpath} | memtype=x project="${this.project.get(r.id) ?? ""}" |`)
+          .join("\n")
+      );
+    }
+    // 3. docIdByHpath / gcEmptyParent：SELECT id FROM blocks WHERE ... hpath='HP'
     let m = stmt.match(/hpath='([^']+)'/);
     if (m && /SELECT id FROM blocks/.test(stmt)) {
       const docs = this.docs.get(m[1]) ?? [];
       if (docs.length === 0) return "no results";
       return `| id |\n|---|\n${docs.map((d) => `| ${d.id} |`).join("\n")}`;
     }
-    // 2. SELECT COUNT(*) AS n FROM blocks WHERE box='NB' AND path LIKE '/ID/%' AND type='d'
+    // 4. childCount：SELECT COUNT(*) AS n FROM blocks WHERE ... path LIKE '/ID/%'
     m = stmt.match(/path LIKE '\/([^']+)\/%'/);
     if (m && /COUNT\(\*\)/.test(stmt)) {
       const count = (this.children.get(m[1]) ?? new Set()).size;
@@ -94,7 +129,19 @@ class MockSiyuan {
         return `document deleted: ${args.id}`;
       }
     }
-    if (name === "siyuan-mcp-attr" && args.action === "set") return "attrs set";
+    if (name === "siyuan-mcp-attr" && args.action === "set") {
+      if (args.attrs?.memtype) this.memtype.add(args.id);
+      if (args.attrs?.project) this.project.set(args.id, args.attrs.project);
+      return "attrs set";
+    }
+    if (name === "siyuan-mcp-search" && args.action === "fulltext") {
+      // 简化：全量命中所有记忆 doc，project 过滤由 mem_search 代码做。
+      const rows = this.memoryDocs();
+      if (rows.length === 0) return "No results";
+      return rows
+        .map((r) => `- [${r.hpath}] project\n  snippet for ${r.hpath}\n  id: ${r.id}`)
+        .join("\n");
+    }
     throw new Error(`mock 未处理：${name} ${args?.action}`);
   }
 }
@@ -175,6 +222,102 @@ async function run() {
       "返回新 doc id",
       typeof r?.content === "string" && r.content.includes("记忆已存入 /solo/mem-z"),
       `返回：${r?.content}`,
+    );
+  }
+
+  // ---- 测试 4：写侧归一——末段变体落到已存在的父段-末段目录，不新建 /<末段> ----
+  {
+    const client = new MockSiyuan();
+    const tools = buildMemTools(client);
+    // 先建 canonical 项目（父段-末段形式）
+    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a" }, {});
+    // 用末段变体存 → 应归一到 GithubRes-Infernix，不建 /Infernix 目录
+    const r = await tools.mem_save.execute({ file_name: "Infernix/mem-b", type: "project", content: "b" }, {});
+    check(
+      "末段变体不新建 /Infernix 父目录",
+      (client.docs.get("/Infernix") ?? []).length === 0,
+      `实际 ${client.docs.get("/Infernix")?.length ?? 0}`,
+    );
+    check(
+      "mem-b 落在 /GithubRes-Infernix 下",
+      (client.docs.get("/GithubRes-Infernix/mem-b") ?? []).length === 1,
+      `实际 ${client.docs.get("/GithubRes-Infernix/mem-b")?.length ?? 0}`,
+    );
+    check(
+      "响应标注已归一",
+      typeof r?.content === "string" && r.content.includes("Infernix → GithubRes-Infernix"),
+      `返回：${r?.content}`,
+    );
+  }
+
+  // ---- 测试 5：读侧候选过滤——mem_search project 命中末段变体记忆 ----
+  {
+    const client = new MockSiyuan();
+    const tools = buildMemTools(client);
+    // canonical 项目一条记忆（走 mem_save）
+    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a" }, {});
+    // 手动建 /Infernix/mem-c（模拟历史分裂，绕过归一）
+    client.docCreate({ notebook: client.nb, path: "/", title: "Infernix" });
+    const leafC = client.docCreate({ notebook: client.nb, path: "/Infernix/mem-c", title: "mem-c" });
+    client.memtype.add(leafC);
+    client.project.set(leafC, "Infernix");
+    // 搜 project=GithubRes-Infernix，候选过滤应命中 /Infernix/mem-c
+    const r = await tools.mem_search.execute({ query: "x", project: "GithubRes-Infernix" }, {});
+    check(
+      "候选过滤命中末段变体记忆 /Infernix/mem-c",
+      typeof r?.content === "string" && r.content.includes("/Infernix/mem-c"),
+      `返回：${r?.content}`,
+    );
+    // 反向：搜一个无关项目应无命中
+    const r2 = await tools.mem_search.execute({ query: "x", project: "unrelated" }, {});
+    check(
+      "无关项目无命中",
+      typeof r2?.content === "string" && r2.content.includes("没有命中"),
+      `返回：${r2?.content}`,
+    );
+  }
+
+  // ---- 测试 6：删侧 GC——删唯一子文档后父目录空壳被一并删掉 ----
+  {
+    const client = new MockSiyuan();
+    const tools = buildMemTools(client);
+    await tools.mem_save.execute({ file_name: "gcproj/mem-only", type: "project", content: "x" }, {});
+    check("删前父目录存在", (client.docs.get("/gcproj") ?? []).length === 1, `实际 ${client.docs.get("/gcproj")?.length ?? 0}`);
+    await tools.mem_delete.execute({ file_name: "gcproj/mem-only" }, {});
+    check(
+      "GC：删唯一子文档后父目录空壳被删",
+      (client.docs.get("/gcproj") ?? []).length === 0,
+      `实际 ${client.docs.get("/gcproj")?.length ?? 0}`,
+    );
+  }
+
+  // ---- 测试 7：helper 单测——slugAliases / normalizeSlug ----
+  {
+    const existing = new Set(["GithubRes-Infernix", "daily"]);
+    check(
+      "slugAliases：末段变体展开",
+      [...slugAliases("Infernix", existing)].sort().join(",") === "GithubRes-Infernix,Infernix",
+      `[${[...slugAliases("Infernix", existing)].join(", ")}]`,
+    );
+    check(
+      "normalizeSlug：末段归一到父段-末段",
+      normalizeSlug("Infernix", existing) === "GithubRes-Infernix",
+      normalizeSlug("Infernix", existing),
+    );
+    check(
+      "normalizeSlug：已存在 slug 原样保留",
+      normalizeSlug("daily", existing) === "daily",
+      normalizeSlug("daily", existing),
+    );
+    check(
+      "normalizeSlug：全新 slug 不归一",
+      normalizeSlug("brandnew", existing) === "brandnew",
+      normalizeSlug("brandnew", existing),
+    );
+    check(
+      "normalizeSlug：两变体并存取最长（父段-末段）",
+      normalizeSlug("Infernix", new Set(["Infernix", "GithubRes-Infernix"])) === "GithubRes-Infernix",
+      normalizeSlug("Infernix", new Set(["Infernix", "GithubRes-Infernix"])),
     );
   }
 

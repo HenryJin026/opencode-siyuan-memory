@@ -80,6 +80,33 @@ function splitFileName(fileName) {
   return { project: segments[0], title: segments.slice(1).join("/") };
 }
 
+// ---------- slug 变体归一（防 /<末段> 与 /<父段-末段> 分裂成两个项目目录）----------
+//
+// 一个项目的 slug 有两个候选形式：末段（Infernix）与 父段-末段（GithubRes-Infernix），
+// 见 index.js slugCandidates。两者指同一项目。已有 slug 集合里若存在某候选，
+// 就应归一到它，避免各建各的目录（2026-10-12 /Infernix 与 /GithubRes-Infernix 并存事故根因）。
+
+// 同一项目的 slug 集合：input + 与已有 slug 中互为「末段 / 父段-末段」变体的。
+// C 与 input 同项目 ⟺ C === input，或 C 以 "-"+input 结尾（C=父段-末段、input=末段），
+// 或 input 以 "-"+C 结尾（input=父段-末段、C=末段）。
+export function slugAliases(input, existingSlugs) {
+  const set = new Set([input]);
+  for (const c of existingSlugs) {
+    if (c === input) continue;
+    if (c.endsWith("-" + input) || input.endsWith("-" + c)) set.add(c);
+  }
+  return set;
+}
+
+// 写入归一：优先落到已存在的 slug（多候选取最长 = 父段-末段形式，更具体）；
+// 无已存在候选则原样返回（新建项目，不归一）。
+export function normalizeSlug(input, existingSlugs) {
+  const aliases = slugAliases(input, existingSlugs);
+  const existing = [...aliases].filter((s) => existingSlugs.has(s));
+  if (existing.length === 0) return input;
+  return existing.sort((a, b) => b.length - a.length)[0];
+}
+
 // ---------- 系统提示注入用：标题级记忆索引 ----------
 
 // 拉全量记忆行（网络 I/O）。返回 [{ id, hpath, ial }, ...]。
@@ -188,6 +215,16 @@ export function buildMemTools(client) {
     return run;
   }
 
+  // 某 doc 的直接子文档数（按 blocks.path 前缀 /<docId>/ 计）。
+  async function childCount(n, docId, signal) {
+    const rows = await sql(
+      client,
+      `SELECT COUNT(*) AS n FROM blocks WHERE box='${n}' AND path LIKE '/${docId}/%' AND type='d'`,
+      signal,
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
   // 同一 hpath 下若有多个 doc（并发创建 / 历史残留），保留子文档最多的那个
   // （真容器），删掉其余（空壳）。必须在建叶子 doc 之前调用，否则新叶子可能
   // 挂到将被删的空壳下。无重复时仅一次 SQL 查询即返回（开销可忽略）。
@@ -201,12 +238,7 @@ export function buildMemTools(client) {
     let keep = rows[0].id;
     let keepCount = -1;
     for (const r of rows) {
-      const kids = await sql(
-        client,
-        `SELECT COUNT(*) AS n FROM blocks WHERE box='${n}' AND path LIKE '/${r.id}/%' AND type='d'`,
-        signal,
-      );
-      const c = Number(kids[0]?.n ?? 0);
+      const c = await childCount(n, r.id, signal);
       if (c > keepCount) {
         keepCount = c;
         keep = r.id;
@@ -214,6 +246,21 @@ export function buildMemTools(client) {
     }
     for (const r of rows) {
       if (r.id !== keep) {
+        await client.callTool("siyuan-mcp-document", { action: "delete", id: r.id }, { signal });
+      }
+    }
+  }
+
+  // 删叶子后 GC：父目录 doc 若已零子文档（空壳），一并删掉，不留 /<project> 空壳。
+  // 只删「确实空」的父目录，有子文档的不动。
+  async function gcEmptyParent(n, project, signal) {
+    const parents = await sql(
+      client,
+      `SELECT id FROM blocks WHERE box='${n}' AND hpath='/${project}' AND type='d'`,
+      signal,
+    );
+    for (const r of parents) {
+      if ((await childCount(n, r.id, signal)) === 0) {
         await client.callTool("siyuan-mcp-document", { action: "delete", id: r.id }, { signal });
       }
     }
@@ -287,8 +334,11 @@ export function buildMemTools(client) {
       },
       async execute(input, context) {
         try {
-          const { project, title } = splitFileName(input.file_name);
+          const { project: rawProject, title } = splitFileName(input.file_name);
           const signal = context?.signal;
+          const slugs = await projectSlugs(signal);
+          const project = normalizeSlug(rawProject, slugs);
+          const normalized = project !== rawProject;
           const newId = await saveMemory({
             project,
             title,
@@ -298,8 +348,9 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
+          const note = normalized ? `（slug 已归一：${rawProject} → ${project}）` : "";
           return {
-            content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）。` +
+            content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）${note}。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
           };
         } catch (err) {
@@ -349,8 +400,11 @@ export function buildMemTools(client) {
           ) {
             throw new Error(`project 需为单个 slug（不含 /）：${input.project}`);
           }
-          const project = input.project.trim();
+          const rawProject = input.project.trim();
           const signal = context?.signal;
+          const slugs = await projectSlugs(signal);
+          const project = normalizeSlug(rawProject, slugs);
+          const normalized = project !== rawProject;
           const newId = await saveMemory({
             project,
             title: "progress",
@@ -359,8 +413,9 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
+          const note = normalized ? `（slug 已归一：${rawProject} → ${project}）` : "";
           return {
-            content: `进度已更新 /${project}/progress（id ${newId}）。` +
+            content: `进度已更新 /${project}/progress（id ${newId}）${note}。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
           };
         } catch (err) {
@@ -425,9 +480,13 @@ export function buildMemTools(client) {
           if (leaked > 0) {
             console.log(`[siyuan-memory] mem_search「${input.query}」检测到 ${leaked} 条非 agent-memory 命中（notebook 过滤疑似失效）`);
           }
-          const filtered = input.project
-            ? hits.filter((e) => e.hpath === input.project || e.hpath.startsWith(`/${input.project}/`))
-            : hits;
+          // project 过滤用候选式：slug 变体（末段 / 父段-末段）都命中，与注入逻辑对齐。
+          let filtered = hits;
+          if (input.project) {
+            const slugs = await projectSlugs(signal);
+            const aliases = slugAliases(input.project, slugs);
+            filtered = hits.filter((e) => aliases.has(e.hpath.split("/")[1]));
+          }
           if (filtered.length === 0) return { content: `「${input.query}」在 agent-memory 里没有命中。` };
           const lines = filtered.map(
             (e) => `- [${e.hpath}] (id ${e.id})\n  ${e.snippet.slice(0, 160)}${e.snippet.length > 160 ? "..." : ""}`,
@@ -456,10 +515,17 @@ export function buildMemTools(client) {
       },
       async execute(input, context) {
         try {
-          const { project, title } = splitFileName(input.file_name);
+          const { project: rawProject, title } = splitFileName(input.file_name);
           const signal = context?.signal;
           const n = await nb(signal);
-          const id = await docIdByHpath(client, n, `/${project}/${title}`, signal);
+          // 叶子可能落在任一 slug 变体下，逐个别名 hpath 找，命中即停。
+          const slugs = await projectSlugs(signal);
+          const aliases = [...slugAliases(rawProject, slugs)];
+          let id = null;
+          for (const a of aliases) {
+            id = await docIdByHpath(client, n, `/${a}/${title}`, signal);
+            if (id) break;
+          }
           if (!id) return { content: `找不到记忆 ${input.file_name}（agent-memory 里没有这个 doc）。` };
           const md = await client.callTool("siyuan-mcp-export", { action: "md", id }, { signal });
           return { content: md };
@@ -484,9 +550,14 @@ export function buildMemTools(client) {
           const signal = context?.signal;
           const n = await nb(signal);
           const project = _input?.project;
-          const stmt =
-            `SELECT id, hpath, ial FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%'` +
-            (project ? ` AND ial LIKE '%project="${project}"%'` : "");
+          let stmt = `SELECT id, hpath, ial FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%'`;
+          if (project) {
+            // 候选式：slug 变体（末段 / 父段-末段）都命中，与注入逻辑对齐。
+            const slugs = await projectSlugs(signal);
+            const aliases = [...slugAliases(project, slugs)];
+            const conds = aliases.map((a) => `ial LIKE '%project="${a}"%'`).join(" OR ");
+            stmt += ` AND (${conds})`;
+          }
           const rows = await sql(client, stmt, signal);
           if (rows.length === 0) return { content: project ? `项目 ${project} 下还没有记忆。` : "agent-memory 里还没有记忆。" };
           const lines = rows.map((r) => {
@@ -515,12 +586,25 @@ export function buildMemTools(client) {
       },
       async execute(input, context) {
         try {
-          const { project, title } = splitFileName(input.file_name);
+          const { project: rawProject, title } = splitFileName(input.file_name);
           const signal = context?.signal;
           const n = await nb(signal);
-          const id = await docIdByHpath(client, n, `/${project}/${title}`, signal);
+          // 叶子可能落在任一 slug 变体下，逐个别名 hpath 找，命中即停。
+          const slugs = await projectSlugs(signal);
+          const aliases = [...slugAliases(rawProject, slugs)];
+          let id = null;
+          let usedProject = rawProject;
+          for (const a of aliases) {
+            id = await docIdByHpath(client, n, `/${a}/${title}`, signal);
+            if (id) {
+              usedProject = a;
+              break;
+            }
+          }
           if (!id) return { content: `找不到记忆 ${input.file_name}，无需删除。` };
           await client.callTool("siyuan-mcp-document", { action: "delete", id }, { signal });
+          // GC：删叶子后父目录若零子文档（空壳），一并删掉，不留 /<project> 空壳。
+          await gcEmptyParent(n, usedProject, signal);
           return { content: `记忆 ${input.file_name} 已删除（id ${id}）。` };
         } catch (err) {
           return { content: `mem_delete 失败：${err.message}` };
