@@ -177,8 +177,8 @@ async function run() {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
     await Promise.all([
-      tools.mem_save.execute({ file_name: "newproj/mem-a", type: "project", content: "a" }, {}),
-      tools.mem_save.execute({ file_name: "newproj/mem-b", type: "project", content: "b" }, {}),
+      tools.mem_save.execute({ file_name: "newproj/mem-a", type: "project", content: "a", newProject: true }, {}),
+      tools.mem_save.execute({ file_name: "newproj/mem-b", type: "project", content: "b", newProject: true }, {}),
     ]);
     const parents = client.docs.get("/newproj") ?? [];
     check(
@@ -204,7 +204,7 @@ async function run() {
     const idA = client.addDoc("/dupproj");
     client.addDoc("/dupproj/mem-x", idA);
     const idB = client.addDoc("/dupproj");
-    await tools.mem_save.execute({ file_name: "dupproj/mem-y", type: "project", content: "y" }, {});
+    await tools.mem_save.execute({ file_name: "dupproj/mem-y", type: "project", content: "y", newProject: true }, {});
     const parents = client.docs.get("/dupproj") ?? [];
     check(
       "去重后只剩一个父目录",
@@ -229,7 +229,7 @@ async function run() {
   {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
-    const r = await tools.mem_save.execute({ file_name: "solo/mem-z", type: "project", content: "z" }, {});
+    const r = await tools.mem_save.execute({ file_name: "solo/mem-z", type: "project", content: "z", newProject: true }, {});
     const parents = client.docs.get("/solo") ?? [];
     check("无重复时正常建一个父目录", parents.length === 1, `实际 ${parents.length}`);
     check(
@@ -244,7 +244,7 @@ async function run() {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
     // 先建 canonical 项目（父段-末段形式）
-    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a" }, {});
+    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a", newProject: true }, {});
     // 用末段变体存 → 应归一到 GithubRes-Infernix，不建 /Infernix 目录
     const r = await tools.mem_save.execute({ file_name: "Infernix/mem-b", type: "project", content: "b" }, {});
     check(
@@ -269,7 +269,7 @@ async function run() {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
     // canonical 项目一条记忆（走 mem_save）
-    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a" }, {});
+    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a", newProject: true }, {});
     // 手动建 /Infernix/mem-c（模拟历史分裂，绕过归一）
     client.docCreate({ notebook: client.nb, path: "/", title: "Infernix" });
     const leafC = client.docCreate({ notebook: client.nb, path: "/Infernix/mem-c", title: "mem-c" });
@@ -295,7 +295,7 @@ async function run() {
   {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
-    await tools.mem_save.execute({ file_name: "gcproj/mem-only", type: "project", content: "x" }, {});
+    await tools.mem_save.execute({ file_name: "gcproj/mem-only", type: "project", content: "x", newProject: true }, {});
     check("删前父目录存在", (client.docs.get("/gcproj") ?? []).length === 1, `实际 ${client.docs.get("/gcproj")?.length ?? 0}`);
     await tools.mem_delete.execute({ file_name: "gcproj/mem-only" }, {});
     check(
@@ -340,21 +340,30 @@ async function run() {
     );
   }
 
-  // ---- 测试 8：写入校验——全新 slug 带「新 slug」警告，已有项目不带 ----
+  // ---- 测试 8：新 slug 硬拦截——被挡后提示 newProject，确认后建，已有项目不挡 ----
   {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
-    const r = await tools.mem_save.execute({ file_name: "brandnewproj/mem-x", type: "project", content: "x" }, {});
+    // 全新 slug，不传 newProject → 被挡（不建 doc）
+    const r1 = await tools.mem_save.execute({ file_name: "brandnewproj/mem-x", type: "project", content: "x" }, {});
     check(
-      "全新 slug 带「新 slug」警告",
-      typeof r?.content === "string" && r.content.includes("新 slug"),
-      `返回：${r?.content}`,
+      "新 slug 不传 newProject 被挡（未创建，提示 newProject）",
+      typeof r1?.content === "string" && r1.content.includes("未创建") && r1.content.includes("newProject"),
+      `返回：${r1?.content}`,
     );
-    const r2 = await tools.mem_save.execute({ file_name: "brandnewproj/mem-y", type: "project", content: "y" }, {});
+    // 传 newProject=true → 建出来
+    const r2 = await tools.mem_save.execute({ file_name: "brandnewproj/mem-x", type: "project", content: "x", newProject: true }, {});
     check(
-      "已有项目不带「新 slug」警告",
-      typeof r2?.content === "string" && !r2.content.includes("新 slug"),
+      "传 newProject=true 建出（已确认新建）",
+      typeof r2?.content === "string" && r2.content.includes("已确认新建") && !r2.content.includes("未创建"),
       `返回：${r2?.content}`,
+    );
+    // 已有项目（brandnewproj 现在存在），不传 newProject → 直接建（不挡）
+    const r3 = await tools.mem_save.execute({ file_name: "brandnewproj/mem-y", type: "project", content: "y" }, {});
+    check(
+      "已有项目不传 newProject 直接建（不挡）",
+      typeof r3?.content === "string" && !r3.content.includes("未创建") && !r3.content.includes("newProject"),
+      `返回：${r3?.content}`,
     );
   }
 
@@ -362,7 +371,7 @@ async function run() {
   {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
-    await tools.mem_save.execute({ file_name: "projA/real-mem", type: "project", content: "x" }, {});
+    await tools.mem_save.execute({ file_name: "projA/real-mem", type: "project", content: "x", newProject: true }, {});
     const r = await tools.mem_read.execute({ file_name: "projA/wrong-title" }, {});
     check(
       "读不到时返回相近匹配（含同项目其它记忆）",

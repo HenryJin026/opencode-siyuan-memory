@@ -329,6 +329,7 @@ export function buildMemTools(client) {
             description: "记忆类型：user / feedback / project / reference",
           },
           content: { type: "string", description: "记忆正文（markdown）" },
+          newProject: { type: "boolean" },
         },
         required: ["file_name", "type", "content"],
         additionalProperties: false,
@@ -340,6 +341,14 @@ export function buildMemTools(client) {
           const slugs = await projectSlugs(signal);
           const project = normalizeSlug(rawProject, slugs);
           const normalized = project !== rawProject;
+          // 硬拦截：新 slug（不匹配已有项目）默认不建，需传 newProject=true 确认，防 typo 静默分裂。
+          // newProject 不写进描述（避免模型习惯性传 true 滥用），只在被挡时经返回文本告知。
+          const isNew = !slugs.has(project);
+          if (isNew && !input.newProject) {
+            return {
+              content: `新 slug「${project}」未匹配到已有项目，未创建。确认是新建项目请传 newProject=true 重调。`,
+            };
+          }
           const newId = await saveMemory({
             project,
             title,
@@ -349,11 +358,9 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
-          // 写入校验：slug 不匹配任何已有项目 → 提示「新 slug」，防 typo 静默分裂
-          const isNew = !slugs.has(project);
           let note = "";
           if (normalized) note += `（slug 已归一：${rawProject} → ${project}）`;
-          if (isNew) note += "（新 slug，未匹配到已有项目，确认是新建？）";
+          if (isNew) note += "（已确认新建项目）";
           return {
             content: `记忆已存入 /${project}/${title}（id ${newId}，memtype ${input.type}）${note}。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
@@ -393,6 +400,7 @@ export function buildMemTools(client) {
             type: "string",
             description: "可选：一句话当前状态摘要（供索引显示，新会话靠它判断要不要 mem_read 全文）",
           },
+          newProject: { type: "boolean" },
         },
         required: ["project", "content"],
         additionalProperties: false,
@@ -411,6 +419,13 @@ export function buildMemTools(client) {
           const slugs = await projectSlugs(signal);
           const project = normalizeSlug(rawProject, slugs);
           const normalized = project !== rawProject;
+          // 硬拦截：新 slug 默认不建，需传 newProject=true 确认（同 mem_save，不写进描述防滥用）。
+          const isNew = !slugs.has(project);
+          if (isNew && !input.newProject) {
+            return {
+              content: `新 slug「${project}」未匹配到已有项目，未创建。确认是新建项目请传 newProject=true 重调。`,
+            };
+          }
           const newId = await saveMemory({
             project,
             title: "progress",
@@ -419,11 +434,9 @@ export function buildMemTools(client) {
             description: input.description,
             signal,
           });
-          // 写入校验：slug 不匹配任何已有项目 → 提示「新 slug」，防 typo 静默分裂
-          const isNew = !slugs.has(project);
           let note = "";
           if (normalized) note += `（slug 已归一：${rawProject} → ${project}）`;
-          if (isNew) note += "（新 slug，未匹配到已有项目，确认是新建？）";
+          if (isNew) note += "（已确认新建项目）";
           return {
             content: `进度已更新 /${project}/progress（id ${newId}）${note}。` +
               "注意：思源写库有延迟，立即 mem_search 可能搜不到，隔几秒再查。",
