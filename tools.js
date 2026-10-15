@@ -98,13 +98,13 @@ export function slugAliases(input, existingSlugs) {
   return set;
 }
 
-// 写入归一：优先落到已存在的 slug（多候选取最长 = 父段-末段形式，更具体）；
-// 无已存在候选则原样返回（新建项目，不归一）。
+// 写入归一：优先落到已存在的 slug（多候选取最短 = 末段形式，即仓库文件夹名，
+// 不带 父段- 前缀）；无已存在候选则原样返回（新建项目，不归一）。
 export function normalizeSlug(input, existingSlugs) {
   const aliases = slugAliases(input, existingSlugs);
   const existing = [...aliases].filter((s) => existingSlugs.has(s));
   if (existing.length === 0) return input;
-  return existing.sort((a, b) => b.length - a.length)[0];
+  return existing.sort((a, b) => a.length - b.length)[0];
 }
 
 // ---------- 系统提示注入用：标题级记忆索引 ----------

@@ -315,9 +315,14 @@ async function run() {
       normalizeSlug("brandnew", existing),
     );
     check(
-      "normalizeSlug：两变体并存取最长（父段-末段）",
-      normalizeSlug("Infernix", new Set(["Infernix", "GithubRes-Infernix"])) === "GithubRes-Infernix",
+      "normalizeSlug：两变体并存取最短（末段，仓库文件夹名）",
+      normalizeSlug("Infernix", new Set(["Infernix", "GithubRes-Infernix"])) === "Infernix",
       normalizeSlug("Infernix", new Set(["Infernix", "GithubRes-Infernix"])),
+    );
+    check(
+      "normalizeSlug：父段-末段输入归一到末段",
+      normalizeSlug("GithubRes-Infernix", new Set(["Infernix", "GithubRes-Infernix"])) === "Infernix",
+      normalizeSlug("GithubRes-Infernix", new Set(["Infernix", "GithubRes-Infernix"])),
     );
   }
 
