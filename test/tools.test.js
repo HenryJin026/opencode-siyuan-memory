@@ -268,13 +268,13 @@ async function run() {
   {
     const client = new MockSiyuan();
     const tools = buildMemTools(client);
-    // canonical 项目一条记忆（走 mem_save）
-    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a", newProject: true }, {});
-    // 手动建 /Infernix/mem-c（模拟历史分裂，绕过归一）
+    // 手动建 /Infernix/mem-c（模拟历史分裂，绕过归一）—— 先建，让 projectSlugs 缓存包含 Infernix
     client.docCreate({ notebook: client.nb, path: "/", title: "Infernix" });
     const leafC = client.docCreate({ notebook: client.nb, path: "/Infernix/mem-c", title: "mem-c" });
     client.memtype.add(leafC);
     client.project.set(leafC, "Infernix");
+    // canonical 项目一条记忆（走 mem_save）—— 后建，seedSlugCache 复用缓存（含 Infernix）+ 加 GithubRes-Infernix
+    await tools.mem_save.execute({ file_name: "GithubRes-Infernix/mem-a", type: "project", content: "a", newProject: true }, {});
     // 搜 project=GithubRes-Infernix，候选过滤应命中 /Infernix/mem-c
     const r = await tools.mem_search.execute({ query: "x", project: "GithubRes-Infernix" }, {});
     check(

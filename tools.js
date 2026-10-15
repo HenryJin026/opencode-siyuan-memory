@@ -266,6 +266,29 @@ export function buildMemTools(client) {
     }
   }
 
+  // 保存后预置新 slug 进 slugCache：复用现有缓存（或缓存失效时新鲜查询拿已有 slug 全集）+ 新 slug。
+  // 避免下次 projectSlugs() 依赖 SQL 索引——刚建 doc 的 IAL 滞后 ~10s 才进索引，
+  // 期间 projectSlugs() 查不到新 slug → 误判新 slug → 硬拦截误挡（2026-10-15 实测 edge case）。
+  async function seedSlugCache(project, signal) {
+    let base;
+    if (slugCache && Date.now() - slugCache.at < SLUG_TTL_MS) {
+      base = slugCache.slugs;
+    } else {
+      const n = await nb(signal);
+      const rows = await sql(
+        client,
+        `SELECT hpath FROM blocks WHERE box='${n}' AND type='d' AND ial LIKE '%memtype=%'`,
+        signal,
+      );
+      base = new Set();
+      for (const r of rows) {
+        const seg = r.hpath?.split("/")[1];
+        if (seg) base.add(seg);
+      }
+    }
+    slugCache = { slugs: new Set([...base, project]), at: Date.now() };
+  }
+
   async function saveMemory(args) {
     return withSaveLock(() => doSaveMemory(args));
   }
@@ -300,7 +323,8 @@ export function buildMemTools(client) {
     if (name) attrs.name = name;
     if (description) attrs.description = description;
     await client.callTool("siyuan-mcp-attr", { action: "set", id: newId, attrs }, { signal });
-    slugCache = null; // 可能新增项目 slug，失效缓存
+    // 预置新 slug 进缓存（复用现有缓存或新鲜查询 + 新 slug），避免下次 projectSlugs() 依赖滞后的 SQL 索引
+    await seedSlugCache(project, signal);
     return newId;
   }
 
